@@ -100,6 +100,13 @@ contains
      call freeunit(unitn)
    endif
 
+   ! Check for valid namelist values 
+   !----------------------------------
+   if(.not.Replay_Model) then
+    write(iulog,*) 'REPLAY: using this model version, Replay_Model must be set to .true.'
+    call endrun('replay_readnl:: ERROR in namelist')
+  endif
+
    ! Broadcast namelist variables
    !------------------------------
 #ifdef SPMD
