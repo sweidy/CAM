@@ -179,7 +179,7 @@ module corrector
   public:: corrector_timestep_init
   public:: corrector_timestep_tend
   private::corrector_update_analyses_fv
-  private::corrector_set_PSprofile
+  !private::corrector_set_PSprofile
   private::corrector_set_profile
 
   ! corrector Parameters
@@ -194,8 +194,8 @@ module corrector
   integer          :: Force_Uprof,Force_Vprof
   real(r8)         :: Force_Qcoef,Force_Tcoef
   integer          :: Force_Qprof,Force_Tprof
-  real(r8)         :: Force_PScoef
-  integer          :: Force_PSprof
+  !real(r8)         :: Force_PScoef
+  !integer          :: Force_PSprof
   integer          :: Force_Beg_Year ,Force_Beg_Month
   integer          :: Force_Beg_Day  ,Force_Beg_Sec
   integer          :: Force_End_Year ,Force_End_Month
@@ -233,17 +233,17 @@ module corrector
   real(r8),allocatable::Target_V     (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Target_S     (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Target_Q     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable::Target_PS    (:,:)    !(pcols,begchunk:endchunk)
+  !real(r8),allocatable::Target_PS    (:,:)    !(pcols,begchunk:endchunk)
   real(r8),allocatable:: Force_Utau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Vtau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Stau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Qtau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Force_PStau (:,:)    !(pcols,begchunk:endchunk)
+  !real(r8),allocatable:: Force_PStau (:,:)    !(pcols,begchunk:endchunk)
   real(r8),allocatable:: Force_Ustep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Vstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Sstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Force_Qstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Force_PSstep(:,:)    !(pcols,begchunk:endchunk)
+  !real(r8),allocatable:: Force_PSstep(:,:)    !(pcols,begchunk:endchunk)
 
   ! corrector Observation Arrays
   !-----------------------------
@@ -276,7 +276,7 @@ contains
                          Force_Vcoef ,Force_Vprof,                     &
                          Force_Qcoef ,Force_Qprof,                     &
                          Force_Tcoef ,Force_Tprof,                     &
-                         Force_PScoef,Force_PSprof,                    &
+                         !Force_PScoef,Force_PSprof,                    &
                          Force_Beg_Year,Force_Beg_Month,Force_Beg_Day, &
                          Force_End_Year,Force_End_Month,Force_End_Day, &
                          Force_Hwin_lat0,Force_Hwin_lon0,              &
@@ -305,12 +305,12 @@ contains
    Force_Vcoef         = 1._r8
    Force_Qcoef         = 1._r8
    Force_Tcoef         = 1._r8
-   Force_PScoef        = 0._r8
+   !Force_PScoef        = 0._r8
    Force_Uprof         = 1 
    Force_Vprof         = 1
    Force_Qprof         = 1
    Force_Tprof         = 1
-   Force_PSprof        = 0
+   !Force_PSprof        = 0
    Force_Beg_Year      = 1980
    Force_Beg_Month     = 1
    Force_Beg_Day       = 1
@@ -424,12 +424,12 @@ contains
    call mpibcast(Force_Vcoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(Force_Tcoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(Force_Qcoef        , 1, mpir8 , 0, mpicom)
-   call mpibcast(Force_PScoef       , 1, mpir8 , 0, mpicom)
+   !call mpibcast(Force_PScoef       , 1, mpir8 , 0, mpicom)
    call mpibcast(Force_Uprof        , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Vprof        , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Tprof        , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Qprof        , 1, mpiint, 0, mpicom)
-   call mpibcast(Force_PSprof       , 1, mpiint, 0, mpicom)
+   !call mpibcast(Force_PSprof       , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Beg_Year     , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Beg_Month    , 1, mpiint, 0, mpicom)
    call mpibcast(Force_Beg_Day      , 1, mpiint, 0, mpicom)
@@ -507,8 +507,8 @@ contains
    call alloc_err(istat,'corrector_init','Target_S',pcols*pver*((endchunk-begchunk)+1))
    allocate(Target_Q(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'corrector_init','Target_Q',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Target_PS(pcols,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'corrector_init','Target_PS',pcols*((endchunk-begchunk)+1))
+   !allocate(Target_PS(pcols,begchunk:endchunk),stat=istat)
+   !call alloc_err(istat,'corrector_init','Target_PS',pcols*((endchunk-begchunk)+1))
 
    ! Allocate Space for spatial dependence of 
    ! corrector Coefs and corrector Forcing.
@@ -521,8 +521,8 @@ contains
    call alloc_err(istat,'corrector_init','Force_Stau',pcols*pver*((endchunk-begchunk)+1))
    allocate(Force_Qtau(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'corrector_init','Force_Qtau',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Force_PStau(pcols,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'corrector_init','Force_PStau',pcols*((endchunk-begchunk)+1))
+   !allocate(Force_PStau(pcols,begchunk:endchunk),stat=istat)
+   !call alloc_err(istat,'corrector_init','Force_PStau',pcols*((endchunk-begchunk)+1))
 
    allocate(Force_Ustep(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'corrector_init','Force_Ustep',pcols*pver*((endchunk-begchunk)+1))
@@ -532,8 +532,8 @@ contains
    call alloc_err(istat,'corrector_init','Force_Sstep',pcols*pver*((endchunk-begchunk)+1))
    allocate(Force_Qstep(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'corrector_init','Force_Qstep',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Force_PSstep(pcols,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'corrector_init','Force_PSstep',pcols*((endchunk-begchunk)+1))
+   !allocate(Force_PSstep(pcols,begchunk:endchunk),stat=istat)
+   !call alloc_err(istat,'corrector_init','Force_PSstep',pcols*((endchunk-begchunk)+1))
 
    ! Register output fields with the cam history module
    !-----------------------------------------------------
@@ -657,12 +657,12 @@ contains
      write(iulog,*) 'corrector: Force_Vcoef  =',Force_Vcoef
      write(iulog,*) 'corrector: Force_Qcoef  =',Force_Qcoef
      write(iulog,*) 'corrector: Force_Tcoef  =',Force_Tcoef
-     write(iulog,*) 'corrector: Force_PScoef =',Force_PScoef
+     !write(iulog,*) 'corrector: Force_PScoef =',Force_PScoef
      write(iulog,*) 'corrector: Force_Uprof  =',Force_Uprof
      write(iulog,*) 'corrector: Force_Vprof  =',Force_Vprof
      write(iulog,*) 'corrector: Force_Qprof  =',Force_Qprof
      write(iulog,*) 'corrector: Force_Tprof  =',Force_Tprof
-     write(iulog,*) 'corrector: Force_PSprof =',Force_PSprof
+     !write(iulog,*) 'corrector: Force_PSprof =',Force_PSprof
      write(iulog,*) 'corrector: Force_Beg_Year =',Force_Beg_Year
      write(iulog,*) 'corrector: Force_Beg_Month=',Force_Beg_Month
      write(iulog,*) 'corrector: Force_Beg_Day  =',Force_Beg_Day
@@ -756,7 +756,7 @@ contains
        call corrector_set_profile(rlat,rlon,Force_Qprof,Wprof,pver)
        Force_Qtau(icol,:,lchnk)=Wprof(:)
 
-       Force_PStau(icol,lchnk)=corrector_set_PSprofile(rlat,rlon,Force_PSprof)
+       !Force_PStau(icol,lchnk)=corrector_set_PSprofile(rlat,rlon,Force_PSprof)
      end do
      Force_Utau(:ncol,:pver,lchnk) =                             &
      Force_Utau(:ncol,:pver,lchnk) * Force_Ucoef/float(Force_Step)
@@ -766,19 +766,19 @@ contains
      Force_Stau(:ncol,:pver,lchnk) * Force_Tcoef/float(Force_Step)
      Force_Qtau(:ncol,:pver,lchnk) =                             &
      Force_Qtau(:ncol,:pver,lchnk) * Force_Qcoef/float(Force_Step)
-     Force_PStau(:ncol,lchnk)=                             &
-     Force_PStau(:ncol,lchnk)* Force_PScoef/float(Force_Step)
+     !Force_PStau(:ncol,lchnk)=                             &
+     !Force_PStau(:ncol,lchnk)* Force_PScoef/float(Force_Step)
 
      Force_Ustep(:pcols,:pver,lchnk)=0._r8
      Force_Vstep(:pcols,:pver,lchnk)=0._r8
      Force_Sstep(:pcols,:pver,lchnk)=0._r8
      Force_Qstep(:pcols,:pver,lchnk)=0._r8
-     Force_PSstep(:pcols,lchnk)=0._r8
+     !Force_PSstep(:pcols,lchnk)=0._r8
      Target_U(:pcols,:pver,lchnk)=0._r8
      Target_V(:pcols,:pver,lchnk)=0._r8
      Target_S(:pcols,:pver,lchnk)=0._r8
      Target_Q(:pcols,:pver,lchnk)=0._r8
-     Target_PS(:pcols,lchnk)=0._r8
+     !Target_PS(:pcols,lchnk)=0._r8
    end do
 
    ! End Routine
@@ -916,7 +916,7 @@ contains
        Force_Vstep(:ncol,:pver,lchnk)=Target_V(:ncol,:pver,lchnk)*Force_Vtau(:ncol,:pver,lchnk)
        Force_Sstep(:ncol,:pver,lchnk)=Target_S(:ncol,:pver,lchnk)*Force_Stau(:ncol,:pver,lchnk)
        Force_Qstep(:ncol,:pver,lchnk)=Target_Q(:ncol,:pver,lchnk)*Force_Qtau(:ncol,:pver,lchnk)
-       Force_PSstep(:ncol,     lchnk)=Target_PS(:ncol,lchnk)*Force_PStau(:ncol,lchnk)
+       !Force_PSstep(:ncol,     lchnk)=Target_PS(:ncol,lchnk)*Force_PStau(:ncol,lchnk)
      end do
 
      if (masterproc) then
@@ -972,9 +972,9 @@ contains
      phys_tend%s(:ncol,:pver)     =Force_Sstep(:ncol,:pver,lchnk)
      phys_tend%q(:ncol,:pver,indw)=Force_Qstep(:ncol,:pver,lchnk)
 
-     if (masterproc) then
-      write(iulog,*) 'phys_tend%u = ', phys_tend%u(1,20)
-     end if
+     !if (masterproc) then
+     ! write(iulog,*) 'phys_tend%u = ', phys_tend%u(1,20)
+     !end if
 
      call outfld( 'Force_U',phys_tend%u                ,pcols,lchnk)
      call outfld( 'Force_V',phys_tend%v                ,pcols,lchnk)
@@ -1012,7 +1012,7 @@ contains
    integer ncid,varid
    integer ilat,ilon,ilev
    real(r8) Xanal(Force_nlon,Force_nlat,Force_nlev)
-   real(r8) PSanal(Force_nlon,Force_nlat)
+   !real(r8) PSanal(Force_nlon,Force_nlat)
    real(r8) Lat_anal(Force_nlat)
    real(r8) Lon_anal(Force_nlon)
    real(r8) Xtrans(Force_nlon,Force_nlev,Force_nlat)
@@ -1194,6 +1194,12 @@ contains
      end do
      end do
      end do
+
+     istat=nf90_close(ncid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
    endif ! (masterproc) then
    call scatter_field_to_chunk(1,Force_nlev,1,Force_nlon,Xtrans,   &
                                Target_Q(1,1,begchunk))
@@ -1310,7 +1316,7 @@ contains
 
 
   !================================================================
-  real(r8) function corrector_set_PSprofile(rlat,rlon,Force_PSprof)
+  !real(r8) function corrector_set_PSprofile(rlat,rlon,Force_PSprof)
    ! 
    ! corrector_SET_PSPROFILE: for the given lat and lon set the surface
    !                      pressure profile value for the specified index.
@@ -1320,8 +1326,8 @@ contains
 
    ! Arguments
    !--------------
-   real(r8) rlat,rlon
-   integer  Force_PSprof
+   !real(r8) rlat,rlon
+   !integer  Force_PSprof
 
    ! Local values
    !----------------
@@ -1329,22 +1335,22 @@ contains
    !---------------
    ! set coeffcient
    !---------------
-   if(Force_PSprof.eq.0) then
+   !if(Force_PSprof.eq.0) then
      ! No corrector
      !-------------
-     corrector_set_PSprofile=0.0_r8
-   elseif(Force_PSprof.eq.1) then
+   !  corrector_set_PSprofile=0.0_r8
+   !elseif(Force_PSprof.eq.1) then
      ! Uniform corrector
      !-----------------
-     corrector_set_PSprofile=1.0_r8
-   else
-     call endrun('corrector_set_PSprofile:: Unknown Force_prof value')
-   endif
+   !  corrector_set_PSprofile=1.0_r8
+   !else
+   !  call endrun('corrector_set_PSprofile:: Unknown Force_prof value')
+   !endif
 
    ! End Routine
    !------------
-   return
-  end function ! corrector_set_PSprofile
+   !return
+  !end function ! corrector_set_PSprofile
   !================================================================
 
 

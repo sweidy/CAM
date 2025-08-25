@@ -34,6 +34,8 @@ use perf_mod
 use cam_logfile,       only: iulog
 use cam_abortutils,    only: endrun
 
+use shr_mem_mod,       only: shr_mem_init
+
 implicit none
 private
 save
@@ -135,6 +137,7 @@ subroutine cam_init(EClock, &
    integer           :: ref_tod     ! Reference time of day (sec)
    !-----------------------------------------------------------------------
 
+   call shr_mem_init()
    call init_pio_subsystem()
 
    ! Initializations using data passed from coupler.

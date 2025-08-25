@@ -92,6 +92,7 @@ subroutine read_namelist(nlfilename, single_column, scmlat, scmlon)
    use nudging,             only: nudging_readnl
    use corrector,           only: corrector_readnl
    use conv_state_swap,     only: conv_state_swap_readnl
+   use stochaiing_corrector,only: stochaiing_readnl
 
    use dyn_comp,            only: dyn_readnl
    use ionosphere_interface,only: ionosphere_readnl
@@ -188,6 +189,7 @@ subroutine read_namelist(nlfilename, single_column, scmlat, scmlon)
    call rate_diags_readnl(nlfilename)
    call scam_readnl(nlfilename, single_column, scmlat, scmlon)
    call nudging_readnl(nlfilename)
+   call stochaiing_readnl(nlfilename)
    call corrector_readnl(nlfilename)
    call conv_state_swap_readnl(nlfilename)
 

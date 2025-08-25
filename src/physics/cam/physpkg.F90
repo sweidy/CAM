@@ -747,7 +747,9 @@ contains
     use nudging,            only: Nudge_Model, nudging_init
     use corrector,          only: Force_Model, corrector_init
     use conv_state_swap,    only: ConvStateSwap_Model, conv_state_swap_init
-
+    !++WEC
+    use stochaiing_corrector, only: Stochai_Model, stochaiing_init
+    !--WEC
     ! Input/output arguments
     type(physics_state), pointer       :: phys_state(:)
     type(physics_tend ), pointer       :: phys_tend(:)
@@ -918,6 +920,8 @@ contains
 
     ! Initialize Corrector
     if(Force_Model) call corrector_init
+
+    if(Stochai_Model) call stochaiing_init !++WEC
 
     ! Initialize Conv state swap
     if(ConvStateSwap_Model) call conv_state_swap_init
@@ -1108,6 +1112,7 @@ contains
     use iop_forcing,     only: scam_use_iop_srf
     use time_manager,       only: get_nstep
     use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend
+    use stochaiing_corrector,         only: Stochai_Model,Stochai_ON,stochaiing_timestep_tend !++WEC
     use check_energy,       only: check_energy_chng 
 #if ( defined OFFLINE_DYN )
     use metdata,         only: get_met_srf2
@@ -1180,6 +1185,20 @@ contains
          call check_energy_chng(phys_state(c), phys_tend(c), "corrector", nstep, ztodt, zero, zero, zero, zero)
       end do
     endif
+
+    !++WEC
+    ! Update Stochain values, if needed
+    !----------------------------------
+    
+    if((Stochai_Model).and.(Stochai_ON)) then
+      nstep = get_nstep()
+      do c=begchunk,endchunk
+         call stochaiing_timestep_tend(phys_state(c),ptend)
+         call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
+         call check_energy_chng(phys_state(c), phys_tend(c), "stochaiing_corrector", nstep, ztodt, zero, zero, zero, zero)
+      end do
+    endif
+    !--WEC
 
     do c=begchunk,endchunk
        ncol = get_ncols_p(c)
@@ -2366,6 +2385,7 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   use epp_ionization,      only: epp_ionization_active
   use iop_forcing,         only: scam_use_iop_srf
   use nudging,             only: Nudge_Model, nudging_timestep_init
+  use stochaiing_corrector,          only: Stochai_Model, stochaiing_timestep_init !++WEC
   use corrector,           only: Force_Model, corrector_timestep_init
 
   implicit none
@@ -2437,6 +2457,7 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   if(Nudge_Model) call nudging_timestep_init(phys_state)
 
   if(Force_Model) call corrector_timestep_init(phys_state)
+  if(Stochai_Model) call stochaiing_timestep_init(phys_state)!++WEC
 
 end subroutine phys_timestep_init
 
