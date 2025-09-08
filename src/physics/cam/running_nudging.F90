@@ -196,7 +196,7 @@ module nudging
   !------------------
   use shr_kind_mod,   only:r8=>SHR_KIND_R8,cs=>SHR_KIND_CS,cl=>SHR_KIND_CL
   use time_manager,   only:timemgr_time_ge,timemgr_time_inc,get_curr_date,get_step_size,get_nstep
-  use phys_grid   ,   only:scatter_field_to_chunk
+  use phys_grid   ,   only:scatter_field_to_chunk, gather_chunk_to_field
   use cam_abortutils, only:endrun
   use spmd_utils  ,   only:masterproc
   use cam_logfile ,   only:iulog
@@ -1277,6 +1277,8 @@ contains
                                       *Tscale*Nudge_PStau(:ncol,lchnk)
      end do
 
+     call nudging_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Nudge_Curr_Day) 
+
      !******************
      ! DIAG
      !******************
@@ -1341,8 +1343,6 @@ contains
      call outfld( 'Nudge_T',phys_tend%s/cpair          ,pcols,lchnk)
      call outfld( 'Nudge_Q',phys_tend%q(1,1,indw)      ,pcols,lchnk)
 
-     ! TODO: save Running_mean_x back into file 
-
    endif
 
    ! End Routine
@@ -1375,8 +1375,7 @@ contains
    integer ncid,varid,varid_t
    integer ilat,ilon,ilev,it, iw
    integer Nudge_ntime ! unsure if I need to set this value earlier ++SW
-   real(r8) Xanal(Nudge_nlon,Nudge_nlat,Nudge_nlev)
-   real(r8) PSanal(Nudge_nlon,Nudge_nlat)
+   real(r8) Xmean(Nudge_nlon,Nudge_nlat,Nudge_nlev)
    real(r8) Lat_anal(Nudge_nlat)
    real(r8) Lon_anal(Nudge_nlon)
    real(r8) Xtrans(Nudge_nlon,Nudge_nlev,Nudge_nlat)
@@ -1390,12 +1389,12 @@ contains
    real, allocatable :: w(:)                              ! window weights
    integer, allocatable :: t_indices(:)                   ! actual time indices used
 
-   ! window config (11-day window)
-   integer, parameter :: win_size = 11 ! TODO: make this a namelist option
+   ! window config 
    integer, dimension(win_size) :: win_offsets 
-   logical, parameter :: use_gaussian = .true.     ! TODO: make this a namelist option
    real :: sigma_days, wsum
-   integer :: halfm, it_center   ! for creating centered window indices
+   integer :: half, it_center   ! for creating centered window indices
+   integer :: itime
+   integer, dimension(4) :: start, count ! for reading time dimension
 
    ! Just read in one file but will select times inside it
    ! If the file is not there, then just return.
@@ -1505,11 +1504,10 @@ contains
        call endrun ('UPDATE_ANALYSES_FV')
      endif
 
-     ! TODO: added chatgpt code below here ++SW
+    ! TODO: figure out how to set the first 5+ days if using the window. should we set it at 0 or 
+    ! at the mean tendency? or something else? check Ding's code
 
     ! Convert requested Y-M-D to the same numeric "days since ..." as time_vals
-    ! (We avoid parsing units by matching to the nearest available entry via a helper.)
-    ! If you want exact conversion from units, extend the helper accordingly.
     call find_nearest_time_index(time_vals, target_year, target_month, target_day, it_center)
 
     ! Define a centered window
@@ -1539,19 +1537,133 @@ contains
     end if
     w = w / wsum   ! normalize
 
+    ! start reading in U
+    istat=nf90_inq_varid(ncid,'U',varid)
+    if(istat.ne.NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun ('UPDATE_ANALYSES_FV')
+    endif
     ! Accumulate weighted mean by reading one time slab at a time
     do iw = 1, win_size
-      integer :: itime
-      integer, dimension(4) :: start, count
+      
       itime = t_indices(iw)
 
-      ! Assuming U(lon,lat,lev,time) dimension order
-      start = (/ 1, 1, 1, itime /)
-      count = (/ nlon, nlat, nlev, 1 /)
-
-      istat = nf90_get_var(ncid, varid_U, Uslab, start=start, count=count)
+      ! Assuming U(time,lon,lat,lev) dimension order
+      start = (/ itime, 1, 1, 1 /)
+      count = (/ 1, nlon, nlat, nlev/)
+      
+      istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
       if (istat /= NF90_NOERR) then
-        write(iulog,*) nf90_strerror(istat); call endrun('UPDATE_ANALYSES_FV(U slab read)')
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV(U slab read)')
+      end if
+
+      Xmean = Xmean + w(iw) * Uslab
+    end do
+
+    ! Xmean(lon,lat,lev) is the weighted climatology for the date window.
+    do ilat = 1, nlat
+      do ilev = 1, nlev
+        do ilon = 1, nlon
+          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+        end do
+      end do
+    end do
+    endif ! (masterproc) then
+    call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                               Target_U(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'V',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     ! Accumulate weighted mean by reading one time slab at a time
+    do iw = 1, win_size
+      
+      itime = t_indices(iw)
+
+      ! Assuming U(time,lon,lat,lev) dimension order
+      start = (/ itime, 1, 1, 1 /)
+      count = (/ 1, nlon, nlat, nlev/)
+      
+      istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
+      if (istat /= NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV(U slab read)')
+      end if
+
+      Xmean = Xmean + w(iw) * Uslab
+    end do
+
+    ! Xmean(lon,lat,lev) is the weighted climatology for the date window.
+    do ilat = 1, nlat
+      do ilev = 1, nlev
+        do ilon = 1, nlon
+          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+        end do
+      end do
+    end do
+    endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                               Target_V(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'T',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     ! Accumulate weighted mean by reading one time slab at a time
+    do iw = 1, win_size
+      
+      itime = t_indices(iw)
+
+      ! Assuming U(time,lon,lat,lev) dimension order
+      start = (/ itime, 1, 1, 1 /)
+      count = (/ 1, nlon, nlat, nlev/)
+      
+      istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
+      if (istat /= NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV(U slab read)')
+      end if
+
+      Xmean = Xmean + w(iw) * Uslab
+    end do
+
+    ! Xmean(lon,lat,lev) is the weighted climatology for the date window.
+    do ilat = 1, nlat
+      do ilev = 1, nlev
+        do ilon = 1, nlon
+          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+        end do
+      end do
+    end do
+    endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                              Target_T(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'Q',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     ! Accumulate weighted mean by reading one time slab at a time
+    do iw = 1, win_size
+      
+      itime = t_indices(iw)
+
+      ! Assuming U(time,lon,lat,lev) dimension order
+      start = (/ itime, 1, 1, 1 /)
+      count = (/ 1, nlon, nlat, nlev/)
+      
+      istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
+      if (istat /= NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV(U slab read)')
       end if
 
       Xmean = Xmean + w(iw) * Uslab
@@ -1566,93 +1678,6 @@ contains
       end do
     end do
 
-     ! Read in, transpose lat/lev indices, 
-     ! and scatter data arrays
-     !----------------------------------
-     istat=nf90_inq_varid(ncid,'U',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Xanal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     do ilat=1,nlat
-     do ilev=1,plev
-     do ilon=1,nlon
-       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
-     end do
-     end do
-     end do
-   endif ! (masterproc) then
-   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
-                               Target_U(1,1,begchunk))
-
-   if(masterproc) then
-     istat=nf90_inq_varid(ncid,'V',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Xanal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     do ilat=1,nlat
-     do ilev=1,plev
-     do ilon=1,nlon
-       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
-     end do
-     end do
-     end do
-   endif ! (masterproc) then
-   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
-                               Target_V(1,1,begchunk))
-
-   if(masterproc) then
-     istat=nf90_inq_varid(ncid,'T',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Xanal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     do ilat=1,nlat
-     do ilev=1,plev
-     do ilon=1,nlon
-       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
-     end do
-     end do
-     end do
-   endif ! (masterproc) then
-   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
-                              Target_T(1,1,begchunk))
-
-   if(masterproc) then
-     istat=nf90_inq_varid(ncid,'Q',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Xanal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     do ilat=1,nlat
-     do ilev=1,plev
-     do ilon=1,nlon
-       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
-     end do
-     end do
-     end do
-
      ! Close the analyses file
      !-----------------------
      istat=nf90_close(ncid)
@@ -1665,8 +1690,6 @@ contains
    call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
                                Target_Q(1,1,begchunk))
 
-
-     
 
    ! End Routine
    !------------
@@ -1893,6 +1916,315 @@ contains
    !------------
    return
   end subroutine ! nudging_update_analyses_fv
+  !================================================================
+
+    !================================================================
+  subroutine nudging_write_model_fv(running_mean_file, target_month, target_day)
+   ! 
+   ! NUDGING_UPDATE_ANALYSES_FV: 
+   !                 Open the given analyses data file, write out in 
+   !                 U,V,T,Q, and PS values and after gathering from chunks
+   !                 the values to all of the chunks.
+   !===============================================================
+   use ppgrid ,only: pver,begchunk
+   use netcdf
+
+   ! Arguments
+   !-------------
+   character(len=*),intent(in):: running_mean_file
+
+   ! Local values
+   !-------------
+   ! adding time variables ++SW
+   integer lev
+   integer nlon,nlat,plev,istat,ntime
+   integer ncid,varid,varid_t
+   integer ilat,ilon,ilev,it, iw
+   integer Nudge_ntime ! unsure if I need to set this value earlier ++SW
+   real(r8) Xanal(Nudge_nlon,Nudge_nlat,Nudge_nlev)
+   real(r8) PSanal(Nudge_nlon,Nudge_nlat)
+   real(r8) Lat_anal(Nudge_nlat)
+   real(r8) Lon_anal(Nudge_nlon)
+   real(r8) Xtrans(Nudge_nlon,Nudge_nlev,Nudge_nlat)
+   integer  nn,Nindex
+
+   integer,intent(in):: target_month, target_day  ! adding for centered mean ++SW
+
+   ! adding for taking weighted mean ++SW
+   real, allocatable :: Time_anal(:)                      ! time dimension (e.g., days since ref)
+   real, allocatable :: Uslab(:,:,:)                      ! lon x lat x lev for one time
+   real, allocatable :: w(:)                              ! window weights
+   integer, allocatable :: t_indices(:)                   ! actual time indices used
+
+   ! window config (11-day window)
+   integer, parameter :: win_size = 11 ! TODO: make this a namelist option
+   integer, dimension(win_size) :: win_offsets 
+   logical, parameter :: use_gaussian = .true.     ! TODO: make this a namelist option
+   real :: sigma_days, wsum
+   integer :: half, it_center   ! for creating centered window indices
+
+   ! Just read in one file but will select times inside it
+   ! If the file is not there, then just return.
+   !------------------------------------------------------------------------
+   if(masterproc) then
+     inquire(FILE=trim(running_mean_file),EXIST=Nudge_File_Present)
+     write(iulog,*)'running mean nudge: Nudge_File_Present=',Nudge_File_Present
+   endif
+#ifdef SPMD
+   call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
+#endif
+   if(.not.Nudge_File_Present) return
+
+   nlon = Force_nlon
+   nlat = Force_nlat
+   plev = pver
+    
+    ! Zeyuan Hu 12/23/2024: gather global state variables
+    !---------------------------------------------------
+   ! TODO: add time dimension to file here as well. 
+
+    call gather_chunk_to_field(1,Nudge_nlev,1,Nudge_nlon,Running_mean_U,Xtrans)
+    if (masterproc) then
+      do ilat=1,nlat
+      do ilev=1,plev
+      do ilon=1,nlon
+
+        ! TODO: take the weighting back in and create a new array that has weighted running mean
+        Uanal(ilon,ilat,ilev)=Xtrans(ilon,ilev,ilat)
+      end do
+      end do
+      end do
+    endif ! (masterproc) then
+
+      ! End Zeyuan's code for gathering chunks from state
+
+      ! start chatgpt code for writing to nc file
+
+      ! Open file for writing
+istat = nf90_open(trim(filename), NF90_WRITE, ncid)
+if(istat.ne.NF90_NOERR) then
+  write(iulog,*) nf90_strerror(istat)
+  call endrun ('UPDATE_ANALYSES_FV')
+endif
+
+! Find variable Q
+istat = nf90_inq_varid(ncid, 'Q', varid)
+if(istat.ne.NF90_NOERR) then
+  write(iulog,*) nf90_strerror(istat)
+  call endrun ('UPDATE_ANALYSES_FV')
+endif
+
+! ---------- Prepare data in the file’s dimension order ----------
+! You read as Xanal(ilon,ilat,ilev) then made Xtrans(ilon,ilev,ilat).
+! If the file’s Q is (lon, lat, lev [, time]), write back using that order.
+! Either transpose back:
+do j = 1, nlat
+  do k = 1, nlev
+    do i = 1, nlon
+      Xanal(i,j,k) = Xtrans(i,k,j)
+    end do
+  end do
+end do
+
+! (if Q has a time/unlimited dimension as the last dim):
+!   Suppose the file order is (lon, lat, lev, time) and you want to write the t_index-th slice:
+integer, dimension(4) :: start, count
+start = (/ 1, 1, 1, t_index /)
+count = (/ nlon, nlat, nlev, 1 /)
+istat = nf90_put_var(ncid, varid, Xanal, start=start, count=count)
+if(istat.ne.NF90_NOERR) then
+  write(iulog,*) nf90_strerror(istat)
+  call endrun ('UPDATE_ANALYSES_FV')
+endif
+
+! Flush and close
+call nf90_sync(ncid)
+call nf90_close(ncid)
+
+! end chatgpt code for writing to nc file. 
+
+! start chatgpt code for figuring out time dimension stuff
+
+
+     ! allocate extra time variables
+     allocate(Time_anal(ntime))
+     allocate(Uslab(Nudge_nlon,Nudge_nlat,Nudge_nlev)) ! using Xanal dimensions (lat,lev flipped)
+     allocate(w(win_size))
+     allocate(t_indices(win_size))
+
+     istat=nf90_get_var(ncid,varid_t,Time_anal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+
+     ! TODO: added chatgpt code below here ++SW
+
+    ! Convert requested Y-M-D to the same numeric "days since ..." as time_vals
+    ! (We avoid parsing units by matching to the nearest available entry via a helper.)
+    ! If you want exact conversion from units, extend the helper accordingly.
+    call find_nearest_time_index(time_vals, target_year, target_month, target_day, it_center)
+
+    ! Define a centered window
+    half = (win_size - 1)/2
+    win_offsets = [(i, i=-half, half)] 
+
+    ! Map offsets to legal indices with wrap-around (use modulo year logic). 
+    do iw = 1, win_size
+      t_indices(iw) = modulo(it_center - 1 + win_offsets(iw), ntime) + 1  ! Fortran 1-based, modulo wrap
+    end do
+
+    ! Build weights (choose triangular or Gaussian)
+    if (.not. use_gaussian) then
+      ! Triangular: weight drops linearly with |offset|, peak at center. Ensure non-negative.
+      do iw = 1, win_size
+        w(iw) = real(half + 1 - abs(win_offsets(iw)))   ! e.g., 3,2,1,2,3 for half=2
+      end do
+    else
+      ! sigma relative to window half-width; sigma_scale ~ 0.5 works well
+      sigma_days = max(1.0e-6, sigma_scale*real(max(1,half)))
+      do iw = 1, win_size
+        w(iw) = exp( -0.5 * ( real(win_offsets(iw)) / sigma_days )**2 )
+      end do
+    end if
+    wsum = sum(w);  if (wsum <= 0.0) then
+      call endrun('UPDATE_ANALYSES_FV: zero/neg window weight sum')
+    end if
+    w = w / wsum   ! normalize
+
+    ! Accumulate weighted mean by reading one time slab at a time
+    do iw = 1, win_size
+      integer :: itime
+      integer, dimension(4) :: start, count
+      itime = t_indices(iw)
+
+      ! Assuming U(lon,lat,lev,time) dimension order
+      start = (/ 1, 1, 1, itime /)
+      count = (/ nlon, nlat, nlev, 1 /)
+
+      istat = nf90_get_var(ncid, varid_U, Uslab, start=start, count=count)
+      if (istat /= NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat); call endrun('UPDATE_ANALYSES_FV(U slab read)')
+      end if
+
+      Xmean = Xmean + w(iw) * Uslab
+    end do
+
+    ! Xmean(lon,lat,lev) is the weighted climatology for the date window.
+    do ilat = 1, nlat
+      do ilev = 1, nlev
+        do ilon = 1, nlon
+          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+        end do
+      end do
+    end do
+
+     ! Read in, transpose lat/lev indices, 
+     ! and scatter data arrays
+     !----------------------------------
+     istat=nf90_inq_varid(ncid,'U',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     istat=nf90_get_var(ncid,varid,Xanal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     do ilat=1,nlat
+     do ilev=1,plev
+     do ilon=1,nlon
+       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
+     end do
+     end do
+     end do
+   endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                               Target_U(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'V',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     istat=nf90_get_var(ncid,varid,Xanal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     do ilat=1,nlat
+     do ilev=1,plev
+     do ilon=1,nlon
+       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
+     end do
+     end do
+     end do
+   endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                               Target_V(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'T',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     istat=nf90_get_var(ncid,varid,Xanal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     do ilat=1,nlat
+     do ilev=1,plev
+     do ilon=1,nlon
+       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
+     end do
+     end do
+     end do
+   endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                              Target_T(1,1,begchunk))
+
+   if(masterproc) then
+     istat=nf90_inq_varid(ncid,'Q',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     istat=nf90_get_var(ncid,varid,Xanal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+     do ilat=1,nlat
+     do ilev=1,plev
+     do ilon=1,nlon
+       Xtrans(ilon,ilev,ilat)=Xanal(ilon,ilat,ilev)
+     end do
+     end do
+     end do
+
+     ! Close the analyses file
+     !-----------------------
+     istat=nf90_close(ncid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+
+   endif ! (masterproc) then
+   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,   &
+                               Target_Q(1,1,begchunk))
+
+
+     
+
+   ! End Routine
+   !------------
+   return
+  end subroutine ! nudging_update_model_fv
   !================================================================
 
   subroutine find_nearest_time_index(time_vals, mm, dd, idx)
