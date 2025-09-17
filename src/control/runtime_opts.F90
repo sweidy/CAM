@@ -91,6 +91,7 @@ subroutine read_namelist(nlfilename, single_column, scmlat, scmlon)
    use tracers,             only: tracers_readnl
    use nudging,             only: nudging_readnl
    use corrector,           only: corrector_readnl
+   use running_mean,           only: running_mean_readnl
    use conv_state_swap,     only: conv_state_swap_readnl
 
    use dyn_comp,            only: dyn_readnl
@@ -189,6 +190,7 @@ subroutine read_namelist(nlfilename, single_column, scmlat, scmlon)
    call scam_readnl(nlfilename, single_column, scmlat, scmlon)
    call nudging_readnl(nlfilename)
    call corrector_readnl(nlfilename)
+   call running_mean_readnl(nlfilename)
    call conv_state_swap_readnl(nlfilename)
 
    call dyn_readnl(nlfilename)

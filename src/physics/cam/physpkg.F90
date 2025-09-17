@@ -746,6 +746,7 @@ contains
     use cam_abortutils,     only: endrun
     use nudging,            only: Nudge_Model, nudging_init
     use corrector,          only: Force_Model, corrector_init
+    use running_mean,       only: Running_mean_Model, running_mean_init
     use conv_state_swap,    only: ConvStateSwap_Model, conv_state_swap_init
 
     ! Input/output arguments
@@ -918,6 +919,9 @@ contains
 
     ! Initialize Corrector
     if(Force_Model) call corrector_init
+
+    ! Initialize Running mean
+    if(Running_mean_Model) call running_mean_init
 
     ! Initialize Conv state swap
     if(ConvStateSwap_Model) call conv_state_swap_init
@@ -1108,6 +1112,7 @@ contains
     use iop_forcing,     only: scam_use_iop_srf
     use time_manager,       only: get_nstep
     use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend
+    use running_mean,          only: Running_mean_Model,Running_mean_ON, running_mean_timestep_tend
     use check_energy,       only: check_energy_chng 
 #if ( defined OFFLINE_DYN )
     use metdata,         only: get_met_srf2
@@ -1178,6 +1183,17 @@ contains
          call corrector_timestep_tend(phys_state(c),ptend)
          call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
          call check_energy_chng(phys_state(c), phys_tend(c), "corrector", nstep, ztodt, zero, zero, zero, zero)
+      end do
+    endif
+
+    ! Update Running mean values, if needed
+    !----------------------------------
+    if((Running_mean_Model).and.(Running_mean_ON)) then
+      nstep = get_nstep()
+      do c=begchunk,endchunk
+         call running_mean_timestep_tend(phys_state(c),ptend) 
+         call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
+         call check_energy_chng(phys_state(c), phys_tend(c), "running_mean", nstep, ztodt, zero, zero, zero, zero)
       end do
     endif
 
@@ -2367,6 +2383,7 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   use iop_forcing,         only: scam_use_iop_srf
   use nudging,             only: Nudge_Model, nudging_timestep_init
   use corrector,           only: Force_Model, corrector_timestep_init
+  use running_mean,           only: Running_mean_Model, running_mean_timestep_init
 
   implicit none
 
@@ -2437,6 +2454,8 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   if(Nudge_Model) call nudging_timestep_init(phys_state)
 
   if(Force_Model) call corrector_timestep_init(phys_state)
+
+  if(Running_mean_Model) call running_mean_timestep_init(phys_state)
 
 end subroutine phys_timestep_init
 

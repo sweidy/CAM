@@ -120,7 +120,7 @@ module running_mean
 !                              4 --> 6 hourly analyses.
 !                              8 --> 3 hourly.
 !
-!      Model_Times_Per_Day - INT Number of times to update the model state (used for nudging) 
+!      Running_mean_Model_times_Per_Day - INT Number of times to update the model state (used for nudging) 
 !                                each day. The value is restricted to be longer than the 
 !                                current model timestep and shorter than the analyses 
 !                                timestep. As this number is increased, the nudging
@@ -217,7 +217,6 @@ module running_mean
   public:: running_mean_timestep_tend
   private::running_mean_update_model_fv
   private::running_mean_update_analyses_fv
-  private::find_nearest_time_index
   private::interpret_filename_climo
   private::running_mean_set_profile
   
@@ -235,7 +234,7 @@ module running_mean
   integer          :: Running_mean_TimeScale_Opt
   integer          :: Running_mean_TSmode
   integer          :: Running_mean_Times_Per_Day
-  integer          :: Model_Times_Per_Day
+  integer          :: Running_mean_Model_times_Per_Day
   real(r8)         :: Running_mean_Ucoef,Running_mean_Vcoef
   integer          :: Running_mean_Uprof,Running_mean_Vprof
   real(r8)         :: Running_mean_Qcoef,Running_mean_Tcoef
@@ -290,12 +289,16 @@ module running_mean
   real(r8),allocatable:: Model_T     (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Model_S     (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Model_Q     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_U     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_V     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_T     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_S     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_Q     (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  real(r8),allocatable:: Running_mean_Utau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  real(r8),allocatable:: Running_mean_U     (:,:,:,:)  !(pcols,pver,begchunk:endchunk,winsize)
+  real(r8),allocatable:: Running_mean_V     (:,:,:,:)  !(pcols,pver,begchunk:endchunk,winsize)
+  real(r8),allocatable:: Running_mean_T     (:,:,:,:)  !(pcols,pver,begchunk:endchunk,winsize)
+  real(r8),allocatable:: Running_mean_Q     (:,:,:,:)  !(pcols,pver,begchunk:endchunk,winsize)
+  real(r8),allocatable:: Running_nudge_U     (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  real(r8),allocatable:: Running_nudge_V     (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  !real(r8),allocatable:: Running_nudge_T     (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  real(r8),allocatable:: Running_nudge_S     (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  real(r8),allocatable:: Running_nudge_Q     (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  real(r8),allocatable:: Running_mean_Utau  (:,:,:)  !(pcols,pver,begchunk:endchunk) 
   real(r8),allocatable:: Running_mean_Vtau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Stau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Qtau  (:,:,:)  !(pcols,pver,begchunk:endchunk)
@@ -303,6 +306,7 @@ module running_mean
   real(r8),allocatable:: Running_mean_Vstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Sstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Qstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
+  integer,allocatable :: Running_mean_nstep (:)      ! accumulated number of steps used for running mean to date (time))
 
   ! running_mean Observation Arrays
   !-----------------------------
@@ -333,7 +337,7 @@ contains
                          Target_File_Template,Running_mean_Force_Opt,          &
                          Running_mean_Path,Running_mean_File_Template, &
                          Running_mean_TimeScale_Opt,                          &
-                         Running_mean_Times_Per_Day,Model_Times_Per_Day,      &
+                         Running_mean_Times_Per_Day,Running_mean_Model_times_Per_Day,      &
                          Running_mean_Ucoef ,Running_mean_Uprof,                     &
                          Running_mean_Vcoef ,Running_mean_Vprof,                     &
                          Running_mean_Qcoef ,Running_mean_Qprof,                     &
@@ -360,15 +364,15 @@ contains
    ! Set Default Namelist values
    !-----------------------------
    Running_mean_Model         = .false.
-   Running_mean_Path          = '/n/holylfs04/LABS/kuang_lab/Lab/sweidman/MERRA2_OG/MERRA2_f19/'
-   Running_mean_File_Template = 'MERRA2_%m%d_%h.nc'
+   Target_Path          = '/n/holylfs04/LABS/kuang_lab/Lab/sweidman/MERRA2_OG/MERRA2_f19/'
+   Target_File_Template = 'MERRA2_%m%d_%h.nc'
    Running_mean_Force_Opt     = 0
    Running_mean_Path          = '/n/home04/sweidman/holylfs04/IC_CESM2/'
    Running_mean_File_Template = 'cam_running_mean.%m-%d-%s.nc'
    Running_mean_TimeScale_Opt = 0
    Running_mean_TSmode        = 0
    Running_mean_Times_Per_Day = 4
-   Model_Times_Per_Day = 4
+   Running_mean_Model_times_Per_Day = 4
    Running_mean_Ucoef         = 1._r8
    Running_mean_Vcoef         = 1._r8
    Running_mean_Qcoef         = 1._r8
@@ -399,7 +403,7 @@ contains
    Running_mean_Vwin_Invert   = .false.
    Running_mean_Vwin_lo       = 0.0_r8
    Running_mean_Vwin_hi       = 1.0_r8
-   Running_mean_win_size           = 11
+   Running_mean_win_size           = 15
    Running_mean_weight_type        = 'uniform'
 
 
@@ -510,7 +514,7 @@ contains
    call mpibcast(Running_mean_TimeScale_Opt, 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_TSmode       , 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Times_Per_Day, 1, mpiint, 0, mpicom)
-   call mpibcast(Model_Times_Per_Day, 1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_Model_times_Per_Day, 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Ucoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vcoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Tcoef        , 1, mpir8 , 0, mpicom)
@@ -582,7 +586,8 @@ contains
    real(r8) Val1_p,Val2_p,Val3_p,Val4_p
    real(r8) Val1_0,Val2_0,Val3_0,Val4_0
    real(r8) Val1_n,Val2_n,Val3_n,Val4_n
-   integer               nn
+   integer  nn
+   integer  modstep
 
    ! Get the time step size
    !------------------------
@@ -612,16 +617,28 @@ contains
    allocate(Model_Q(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'running_mean_init','Model_Q',pcols*pver*((endchunk-begchunk)+1))
 
-   allocate(Running_mean_U(pcols,pver,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'running_mean_init','Running_mean_U',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Running_mean_V(pcols,pver,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'running_mean_init','Running_mean_V',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Running_mean_T(pcols,pver,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'running_mean_init','Running_mean_T',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Running_mean_S(pcols,pver,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'running_mean_init','Running_mean_S',pcols*pver*((endchunk-begchunk)+1))
-   allocate(Running_mean_Q(pcols,pver,begchunk:endchunk),stat=istat)
-   call alloc_err(istat,'running_mean_init','Running_mean_Q',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Running_nudge_U(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_nudge_U',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Running_nudge_V(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_nudge_V',pcols*pver*((endchunk-begchunk)+1))
+   !allocate(Running_nudge_T(pcols,pver,begchunk:endchunk),stat=istat)
+   !call alloc_err(istat,'running_mean_init','Running_nudge_T',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Running_nudge_S(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_nudge_S',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Running_nudge_Q(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_nudge_Q',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Running_mean_U(pcols,pver,begchunk:endchunk,Running_mean_win_size),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_mean_U',pcols*pver*((endchunk-begchunk)+1)*Running_mean_win_size)
+   allocate(Running_mean_V(pcols,pver,begchunk:endchunk,Running_mean_win_size),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_mean_V',pcols*pver*((endchunk-begchunk)+1)*Running_mean_win_size)
+   allocate(Running_mean_T(pcols,pver,begchunk:endchunk,Running_mean_win_size),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_mean_T',pcols*pver*((endchunk-begchunk)+1)*Running_mean_win_size)
+   allocate(Running_mean_Q(pcols,pver,begchunk:endchunk,Running_mean_win_size),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_mean_Q',pcols*pver*((endchunk-begchunk)+1)*Running_mean_win_size)
+
+   allocate(Running_mean_nstep(Running_mean_win_size),stat=istat)
+   call alloc_err(istat, 'running_mean_init', 'Running_mean_nstep',Running_mean_win_size)
 
    ! Allocate Space for spatial dependence of 
    ! running_mean Coefs and running_mean Forcing.
@@ -647,10 +664,10 @@ contains
 
    ! Register output fields with the cam history module
    !-----------------------------------------------------
-   call addfld( 'Running_mean_U',(/ 'lev' /),'A','m/s/s'  ,'U running_mean Tendency')
-   call addfld( 'Running_mean_V',(/ 'lev' /),'A','m/s/s'  ,'V running_mean Tendency')
-   call addfld( 'Running_mean_T',(/ 'lev' /),'A','K/s'    ,'T running_mean Tendency')
-   call addfld( 'Running_mean_Q',(/ 'lev' /),'A','kg/kg/s','Q running_mean Tendency')
+   call addfld( 'Running_nudge_U',(/ 'lev' /),'A','m/s/s'  ,'U running_mean nudging Tendency')
+   call addfld( 'Running_nudge_V',(/ 'lev' /),'A','m/s/s'  ,'V running_mean nudging Tendency')
+   call addfld( 'Running_nudge_T',(/ 'lev' /),'A','K/s'    ,'T running_mean nudging Tendency')
+   call addfld( 'Running_nudge_Q',(/ 'lev' /),'A','kg/kg/s','Q running_mean nudging Tendency')
    call addfld('Target_U',(/ 'lev' /),'A','m/s'    ,'U running_mean Target'  )
    call addfld('Target_V',(/ 'lev' /),'A','m/s'    ,'V running_mean Target'  )
    call addfld('Target_T',(/ 'lev' /),'A','K'      ,'T running_mean Target'  )
@@ -665,7 +682,7 @@ contains
      ! Ensure that the Model_Step is not smaller then one timestep
      !  and not larger then the Running_mean_Step.
      !--------------------------------------------------------
-     Model_Step=86400/Model_Times_Per_Day
+     Model_Step=86400/Running_mean_Model_times_Per_Day
      Running_mean_Step=86400/Running_mean_Times_Per_Day
      if(Model_Step.lt.dtime) then
        write(iulog,*) ' '
@@ -790,15 +807,15 @@ contains
      write(iulog,*) '  MODEL running_mean INITIALIZED WITH THE FOLLOWING SETTINGS: '
      write(iulog,*) '---------------------------------------------------------'
      write(iulog,*) 'running_mean: Running_mean_Model=',Running_mean_Model
-     write(iulog,*) 'running_mean: Running_mean_Path=',Target_Path
-     write(iulog,*) 'running_mean: Running_mean_File_Template =',Target_File_Template
+     write(iulog,*) 'running_mean: Target_Path=',Target_Path
+     write(iulog,*) 'running_mean: Target_File_Template =',Target_File_Template
      write(iulog,*) 'running_mean: Running_mean_Path=',Running_mean_Path
      write(iulog,*) 'running_mean: Running_mean_File_Template =',Running_mean_File_Template
      write(iulog,*) 'running_mean: Running_mean_Force_Opt=',Running_mean_Force_Opt    
      write(iulog,*) 'running_mean: Running_mean_TimeScale_Opt=',Running_mean_TimeScale_Opt    
      write(iulog,*) 'running_mean: Running_mean_TSmode=',Running_mean_TSmode
      write(iulog,*) 'running_mean: Running_mean_Times_Per_Day=',Running_mean_Times_Per_Day
-     write(iulog,*) 'running_mean: Model_Times_Per_Day=',Model_Times_Per_Day
+     write(iulog,*) 'running_mean: Running_mean_Model_times_Per_Day=',Running_mean_Model_times_Per_Day
      write(iulog,*) 'running_mean: Running_mean_Step=',Running_mean_Step
      write(iulog,*) 'running_mean: Model_Step=',Model_Step
      write(iulog,*) 'running_mean: Running_mean_Ucoef  =',Running_mean_Ucoef
@@ -879,16 +896,17 @@ contains
    endif
 !!DIAG
 
-   ! TODO: initialize the running mean file: should it be all 0s or something else?
-
    ! Initialize the analysis filename at the NEXT time for startup.
    ! TODO: this is not the right file to read -- use the previous timestep
    !---------------------------------------------------------------
-   Target_File=interpret_filename_spec(Target_File_Template      , &
-                                       yr_spec=Running_mean_Next_Year , &
-                                      mon_spec=Running_mean_Next_Month, &
-                                      day_spec=Running_mean_Next_Day  , &
-                                      sec_spec=Running_mean_Next_Sec    )
+   
+   modstep=int(Running_mean_Next_Sec / 10800)
+
+   Target_File=interpret_filename_climo(Target_File_Template      , &
+          mon_spec=Running_mean_Next_Month, &
+          day_spec=Running_mean_Next_Day  , &
+          hr_spec=modstep, &
+          sec_spec=Running_mean_Next_Sec    )
    if(masterproc) then
     write(iulog,*) 'running_mean: Reading analyses:',trim(Target_Path)//trim(Target_File)
    endif
@@ -925,6 +943,12 @@ contains
      Running_mean_Qtau(:ncol,:pver,lchnk) =                             &
      Running_mean_Qtau(:ncol,:pver,lchnk) * Running_mean_Qcoef/float(Running_mean_Step)
 
+     Running_mean_U(:pcols,:pver,lchnk)=0._r8
+     Running_mean_V(:pcols,:pver,lchnk)=0._r8
+     Running_mean_T(:pcols,:pver,lchnk)=0._r8
+     Running_mean_S(:pcols,:pver,lchnk)=0._r8
+     Running_mean_Q(:pcols,:pver,lchnk)=0._r8
+
      Running_mean_Ustep(:pcols,:pver,lchnk)=0._r8
      Running_mean_Vstep(:pcols,:pver,lchnk)=0._r8
      Running_mean_Sstep(:pcols,:pver,lchnk)=0._r8
@@ -935,6 +959,8 @@ contains
      Target_S(:pcols,:pver,lchnk)=0._r8
      Target_Q(:pcols,:pver,lchnk)=0._r8
    end do
+
+   Running_mean_nstep(:)=0
 
    ! End Routine
    !------------
@@ -980,27 +1006,16 @@ contains
    integer                 nn
    integer                 kk
    real(r8)                Sbar,Qbar,Wsum
-   integer                 modstep
+   integer                 modstep, nstep
 
-   real(r8)                wrk, nstep
+   real(r8)                wrk  ! nudging timescale, adjusted by running_mean_nstep
+   integer                 iw, nstep_idx, half
+
    ! Check if running_mean is initialized
    !---------------------------------
    if(.not.Running_mean_Initialized) then
      call endrun('running_mean_timestep_init:: running_mean NOT Initialized')
    endif
-
-   ! TODO: set wrk to a reasonable value, change over time
-   
-   nstep = get_nstep()
-   if (nstep > 96000) then
-       wrk = 1._r8/96000._r8
-   else 
-       wrk = 1._r8 / (1._r8 + nstep-1)
-   endif
-
-   if (masterproc) then
-     write(iulog,*) "wrk; nstep", wrk, nstep
-   end if
 
    ! Get Current time
    !--------------------
@@ -1078,9 +1093,9 @@ contains
 
       Running_mean_File=interpret_filename_spec(Running_mean_File_Template      , &
                                         sec_spec=Model_Curr_Sec    )
-      INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=fileexists)
+      INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
       
-      if (.not. fileexists) print*, 'running mean file missing', Running_mean_File
+      if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
      
      if(masterproc) then
       write(iulog,*) 'running_mean: Reading analyses:',trim(Running_mean_Path)//trim(Running_mean_File)
@@ -1090,24 +1105,56 @@ contains
     call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Running_mean_Curr_Day)
 
      ! Load Dry Static Energy values for Model
-
     ! DSE tendencies from Temperature only
     !---------------------------------------
-    do lchnk=begchunk,endchunk
-      ncol=phys_state(lchnk)%ncol
-      Running_mean_S(:ncol,:pver,lchnk)=cpair*Running_mean_T(:ncol,:pver,lchnk)
-    end do
+    
+    ! only use centered value as nudging, but calculate weight for each
+    do iw = 1, Running_mean_win_size
+      nstep_idx = Running_mean_nstep(iw)
+
+      if (nstep_idx > 96000) then
+          wrk = 1._r8/96000._r8
+      elseif (nstep_idx < 1._r8) then ! in case of nstep = 0
+          wrk = 1._r8
+      else 
+          wrk = 1._r8 / (1._r8 + nstep_idx-1)
+      endif
+
+      if (masterproc) then
+          write(iulog,*) "iw; wrk; nstep", iw, wrk, nstep_idx
+      end if
 
     do lchnk=begchunk,endchunk
          ncol=phys_state(lchnk)%ncol
-         Running_mean_U(:ncol,:pver,lchnk)=Running_mean_U(:ncol,:pver,lchnk)*wrk + Model_U(:ncol,:pver,lchnk)*(1-wrk)
-         Running_mean_V(:ncol,:pver,lchnk)=Running_mean_V(:ncol,:pver,lchnk)*wrk + Model_V(:ncol,:pver,lchnk)*(1-wrk)
-         Running_mean_S(:ncol,:pver,lchnk)=Running_mean_S(:ncol,:pver,lchnk)*wrk + Model_S(:ncol,:pver,lchnk)*(1-wrk)
-         Running_mean_Q(:ncol,:pver,lchnk)=Running_mean_Q(:ncol,:pver,lchnk)*wrk + Model_Q(:ncol,:pver,lchnk)*(1-wrk)
-       end do
+         Running_mean_U(:ncol,:pver,lchnk,iw)=Running_mean_U(:ncol,:pver,lchnk,iw)*(1-wrk) + Model_U(:ncol,:pver,lchnk)*wrk
+         Running_mean_V(:ncol,:pver,lchnk,iw)=Running_mean_V(:ncol,:pver,lchnk,iw)*(1-wrk) + Model_V(:ncol,:pver,lchnk)*wrk
+         Running_mean_T(:ncol,:pver,lchnk,iw)=Running_mean_T(:ncol,:pver,lchnk,iw)*(1-wrk) + Model_S(:ncol,:pver,lchnk)*wrk
+         Running_mean_Q(:ncol,:pver,lchnk,iw)=Running_mean_Q(:ncol,:pver,lchnk,iw)*(1-wrk) + Model_Q(:ncol,:pver,lchnk)*wrk
+    end do
+    end do ! do iw
+
+    half = (Running_mean_win_size - 1)/2 ! center index
+    if(masterproc) then
+      write(iulog,*) 'half index for nudging: ', half
+    endif
+    ! save nudging tendency as centered running mean
+    do lchnk=begchunk,endchunk
+       ncol=phys_state(lchnk)%ncol
+       Running_nudge_U(:ncol,:pver,lchnk)=Running_mean_U(:ncol,:pver,lchnk,half)
+       Running_nudge_V(:ncol,:pver,lchnk)=Running_mean_V(:ncol,:pver,lchnk,half)
+       Running_nudge_S(:ncol,:pver,lchnk)=Running_mean_T(:ncol,:pver,lchnk,half)*cpair
+       Running_nudge_Q(:ncol,:pver,lchnk)=Running_mean_Q(:ncol,:pver,lchnk,half)
+     end do
+
+
+    if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
+    if(masterproc) then
+      write(iulog,*) 'running_mean: Writing to file:',trim(Running_mean_Path)//trim(Running_mean_File)
+    endif
+
+    call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Running_mean_Curr_Day) 
 
    endif ! ((Before_End).and.(Update_Model)) then
-
 
    !----------------------------------------------------------------
    ! When past the NEXT time, Update running_mean Arrays and time indices
@@ -1134,18 +1181,18 @@ contains
      ! Set the analysis filename at the NEXT time. (MERRA)
      !---------------------------------------------------------------
      modstep=int(Running_mean_Next_Sec / 10800)
-     filename=interpret_filename_climo(Target_File_Template      , &
+     Target_File=interpret_filename_climo(Target_File_Template      , &
           mon_spec=Running_mean_Next_Month, &
           day_spec=Running_mean_Next_Day  , &
           hr_spec=modstep, &
           sec_spec=Running_mean_Next_Sec    )
 
       if(masterproc) then
-        write(iulog,*) trim(Target_Path)//trim(filename)
+        write(iulog,*) trim(Target_Path)//trim(Target_File)
       endif
       
-      INQUIRE(FILE=trim(Target_Path)//trim(filename), EXIST=fileexists)
-      if (.not. fileexists) print*, 'running_mean target file missing', filename
+      INQUIRE(FILE=trim(Target_Path)//trim(Target_File), EXIST=Target_File_Present)
+      if (.not. Target_File_Present) print*, 'running_mean target file missing', Target_File
 
      !----------------------------------------------------------
     call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
@@ -1161,9 +1208,6 @@ contains
      Running_mean_ON=.false.
    endif
 
-   !-------------------------------------------------------
-   ! HERE Implement time dependence of running_mean Coefs HERE
-   !-------------------------------------------------------
    !---------------------------------------------------
    ! If Data arrays have changed update stepping arrays
    !---------------------------------------------------
@@ -1197,25 +1241,31 @@ contains
        call endrun('running_mean_timestep_init:: ERROR unknown running_mean_TimeScale_Opt')
      endif
 
-     ! Update the running_mean tendencies
+     ! Update the running_mean tendencies with center idx
      !--------------------------------
      do lchnk=begchunk,endchunk
        ncol=phys_state(lchnk)%ncol
        Running_mean_Ustep(:ncol,:pver,lchnk)=(  Target_U(:ncol,:pver,lchnk)      &
-                                         -Running_mean_U(:ncol,:pver,lchnk))     &
+                                         -Running_nudge_U(:ncol,:pver,lchnk))     &
                                       *Tscale*Running_mean_Utau(:ncol,:pver,lchnk)
        Running_mean_Vstep(:ncol,:pver,lchnk)=(  Target_V(:ncol,:pver,lchnk)      &
-                                         -Running_mean_V(:ncol,:pver,lchnk))     &
+                                         -Running_nudge_V(:ncol,:pver,lchnk))     &
                                       *Tscale*Running_mean_Vtau(:ncol,:pver,lchnk)
        Running_mean_Sstep(:ncol,:pver,lchnk)=(  Target_S(:ncol,:pver,lchnk)      &
-                                         -Running_mean_S(:ncol,:pver,lchnk))     &
+                                         -Running_nudge_S(:ncol,:pver,lchnk))     &
                                       *Tscale*Running_mean_Stau(:ncol,:pver,lchnk)
        Running_mean_Qstep(:ncol,:pver,lchnk)=(  Target_Q(:ncol,:pver,lchnk)      &
-                                         -Running_mean_Q(:ncol,:pver,lchnk))     &
+                                         -Running_nudge_Q(:ncol,:pver,lchnk))     &
                                       *Tscale*Running_mean_Qtau(:ncol,:pver,lchnk)
      end do
 
-     call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Running_mean_Curr_Day) 
+     if (masterproc) then
+        write(iulog,*) 'day, sec', Running_mean_Curr_Day, Running_mean_Curr_Sec
+        write(iulog,*) 'Running_mean_Utau(1,20,1) = ', Running_mean_Utau(1,20,begchunk)
+        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
+        write(iulog,*) 'Running_mean_U(1,20,1) = ', Running_mean_U(1,20,begchunk) 
+        write(iulog,*) 'Running_mean_Ustep(1,20,1) = ', Running_mean_Ustep(1,20,begchunk)
+     end if
 
      !******************
      ! DIAG
@@ -1276,10 +1326,10 @@ contains
      phys_tend%s(:ncol,:pver)     =Running_mean_Sstep(:ncol,:pver,lchnk)
      phys_tend%q(:ncol,:pver,indw)=Running_mean_Qstep(:ncol,:pver,lchnk)
 
-     !call outfld( 'Running_mean_U',phys_tend%u                ,pcols,lchnk)
-     !call outfld( 'Running_mean_V',phys_tend%v                ,pcols,lchnk)
-     !call outfld( 'Running_mean_T',phys_tend%s/cpair          ,pcols,lchnk)
-     !call outfld( 'Running_mean_Q',phys_tend%q(1,1,indw)      ,pcols,lchnk)
+     call outfld( 'Running_mean_U',phys_tend%u                ,pcols,lchnk)
+     call outfld( 'Running_mean_V',phys_tend%v                ,pcols,lchnk)
+     call outfld( 'Running_mean_T',phys_tend%s/cpair          ,pcols,lchnk)
+     call outfld( 'Running_mean_Q',phys_tend%q(1,1,indw)      ,pcols,lchnk)
 
    endif
 
@@ -1312,23 +1362,32 @@ contains
    integer nlon,nlat,plev,istat,ntime
    integer ncid,varid
    integer ilat,ilon,ilev, iw
-   real(r8) Xmean(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)
+   !real(r8) Xmean(Running_mean_nlev,Running_mean_nlat,Running_mean_nlon)
    real(r8) Lat_anal(Running_mean_nlat)
    real(r8) Lon_anal(Running_mean_nlon)
    real(r8) Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
 
    ! adding for taking weighted mean ++SW
    real(r8), allocatable :: Time_anal(:)                      ! time dimension (e.g., days since ref)
-   real(r8), allocatable :: Uslab(:,:,:)                      ! lon x lat x lev for one time
-   real(r8), allocatable :: w(:)                              ! window weights
-   integer, allocatable  :: t_indices(:)                   ! actual time indices used
+   real(r8), allocatable :: Uslab(:,:,:,:)                      ! lon x lat x lev for one time
+   !real(r8), allocatable :: w(:)                              ! window weights
+   integer, allocatable  :: t_indices(:)                      ! actual time indices used
 
    ! window config 
    integer, dimension(Running_mean_win_size) :: win_offsets 
-   real(r8) :: sigma_days, wsum
+   !real(r8) :: sigma_days, wsum
    integer :: half, it_center   ! for creating centered window indices
    integer :: itime
    integer, dimension(4) :: start, count ! for reading time dimension
+   integer, dimension(1) :: start_t, count_t ! for reading nstep_nudge
+
+   ! calculate doy
+   integer, dimension(12) :: cum = (/ 0,31,59,90,120,151,181,212,243,273,304,334 /)
+   integer :: ndoys = 365
+   integer :: doy, nstep_nudge
+
+   integer :: ndims, dimids(4), dimid, dimlen, k
+   character(len=NF90_MAX_NAME) :: dimname
 
    ! Just read in one file but will select times inside it
    ! If the file is not there, then just return.
@@ -1360,46 +1419,46 @@ contains
      istat=nf90_inq_dimid(ncid,'lon',varid)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lon')
      endif
      istat=nf90_inquire_dimension(ncid,varid,len=nlon)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lon')
      endif
 
      istat=nf90_inq_dimid(ncid,'lat',varid)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lat')
      endif
      istat=nf90_inquire_dimension(ncid,varid,len=nlat)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lat')
      endif
 
      istat=nf90_inq_dimid(ncid,'lev',varid)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lev')
      endif
      istat=nf90_inquire_dimension(ncid,varid,len=plev)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV lev')
      endif
 
      ! added read in time dimension ++SW
      istat=nf90_inq_dimid(ncid,'time',varid)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV time')
      endif
      istat=nf90_inquire_dimension(ncid,varid,len=ntime)
      if(istat.ne.NF90_NOERR) then
        write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
+       call endrun ('UPDATE_ANALYSES_FV time')
      endif
 
      istat=nf90_inq_varid(ncid,'lon',varid)
@@ -1433,8 +1492,8 @@ contains
 
      ! allocate extra time variables
      allocate(Time_anal(ntime))
-     allocate(Uslab(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)) ! using Xanal dimensions 
-     allocate(w(Running_mean_win_size))
+     allocate(Uslab(Running_mean_nlev,Running_mean_nlat,Running_mean_nlon))
+     !allocate(w(Running_mean_win_size))
      allocate(t_indices(Running_mean_win_size))
 
      istat=nf90_inq_varid(ncid,'time',varid)
@@ -1448,71 +1507,122 @@ contains
        call endrun ('UPDATE_ANALYSES_FV')
      endif
 
-    ! Convert requested Y-M-D to the same numeric "days since ..." as Time_anal
-    call find_nearest_time_index(Time_anal, target_month, target_day, it_center)
+    ! calculate doy for time index of file
+    doy = cum(target_month) + target_day
+    it_center = doy+1 !modulo(doy-1, ndoys) + 1
+    write(iulog,*) 'calculated it_center ', it_center
 
     ! Define a centered window
     half = (Running_mean_win_size - 1)/2
-    win_offsets = [(i, i=-half, half)] 
+    win_offsets = [(iw, iw=-half, half)] 
 
     ! Map offsets to legal indices with wrap-around (use modulo year logic). 
     do iw = 1, Running_mean_win_size
       t_indices(iw) = modulo(it_center - 1 + win_offsets(iw), ntime) + 1  ! Fortran 1-based, modulo wrap
     end do
+    write(iulog,*) 'calculated t_indices ', t_indices
 
-    ! create weights. needs to be one of uniform, gaussian, or triangular
-    select case (trim(Running_mean_weight_type))
-    case ("uniform")
-      do iw = 1, Running_mean_win_size
-        w(iw) = 1.0_r8 
-      end do
-    case ("gaussian")
-      ! sigma relative to window half-width; ~ 0.5 works well, using as default
-      sigma_days = max(1.0e-6, 0.5*real(max(1,half),kind=r8))
-      do iw = 1, Running_mean_win_size
-        w(iw) = exp( -0.5 * ( real(win_offsets(iw), r8) / sigma_days )**2 )
-      end do
-    case ("triangular")
-      ! Triangular: weight drops linearly with |offset|, peak at center. Ensure non-negative.
-      do iw = 1, Running_mean_win_size
-        w(iw) = real(half + 1 - abs(win_offsets(iw)), r8)   
-      end do
-    end select
-    wsum = sum(w);  if (wsum <= 0.0_r8) then
-      call endrun('UPDATE_ANALYSES_FV: zero/neg window weight sum')
+    ! ! create weights. needs to be one of uniform, gaussian, or triangular
+    ! select case (trim(Running_mean_weight_type))
+    ! case ("uniform")
+    !   do iw = 1, Running_mean_win_size
+    !     w(iw) = 1.0_r8 
+    !   end do
+    ! case ("gaussian")
+    !   ! sigma relative to window half-width; ~ 0.5 works well, using as default
+    !   sigma_days = max(1.0e-6, 0.5*real(max(1,half),kind=r8))
+    !   do iw = 1, Running_mean_win_size
+    !     w(iw) = exp( -0.5 * ( real(win_offsets(iw), r8) / sigma_days )**2 )
+    !   end do
+    ! case ("triangular")
+    !   ! Triangular: weight drops linearly with |offset|, peak at center. Ensure non-negative.
+    !   do iw = 1, Running_mean_win_size
+    !     w(iw) = real(half + 1 - abs(win_offsets(iw)), r8)   
+    !   end do
+    ! end select
+    ! wsum = sum(w);  if (wsum <= 0.0_r8) then
+    !   call endrun('UPDATE_ANALYSES_FV: zero/neg window weight sum')
+    ! end if
+    ! w = w / wsum   ! normalize
+
+    ! write(iulog,*) 'calculated weights ', w
+
+    ! start reading in nstep
+    istat=nf90_inq_varid(ncid,'nstep_nudge',varid)
+    if(istat.ne.NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun ('UPDATE_ANALYSES_FV')
+    endif
+
+    start_t = t_indices(1)
+    count_t = Running_mean_win_size
+    
+    istat = nf90_get_var(ncid, varid, nstep_nudge, start=start_t, count=count_t)
+    if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('UPDATE_ANALYSES_FV(nstep slab read)')
     end if
-    w = w / wsum   ! normalize
+    Running_mean_nstep(:) = nstep_nudge(:)
+    write(iulog,*) 'running_mean_nstep from file: ',Running_mean_nstep
 
+    ! do iw = 1, Running_mean_win_size
+      
+    !   itime = t_indices(iw)
+
+    !   start_t = itime
+    !   count_t = 1
+    !   ! TODO: can't do a start count situation for scalars (but how to read correct timestep)
+    !   istat = nf90_get_var(ncid, varid, nstep_nudge, start=start_t)
+    !   if (istat /= NF90_NOERR) then
+    !     write(iulog,*) nf90_strerror(istat)
+    !     call endrun('UPDATE_ANALYSES_FV(nstep slab read)')
+    !   end if
+
+    !   Running_mean_nstep(iw) = nstep_nudge
+    ! end do
+    endif ! (masterproc) then
+
+! TODO: send to other processors?
+!#ifdef SPMD
+!    call mpibcast(Running_mean_nstep, Running_mean_win_size, mpiint, 0, mpicom)
+!#endif
+
+    if(masterproc) then
     ! start reading in U
     istat=nf90_inq_varid(ncid,'U',varid)
     if(istat.ne.NF90_NOERR) then
       write(iulog,*) nf90_strerror(istat)
       call endrun ('UPDATE_ANALYSES_FV')
     endif
+    
     ! Accumulate weighted mean by reading one time slab at a time
-    Xmean = 0.0_r8
-    do iw = 1, Running_mean_win_size
-      
-      itime = t_indices(iw)
+    ! TODO: change to not taking a mean here. 
+    ! need to have start / count be a vector for full window
+    ! xanal / xtrans need to have more dimensions to send to chunks
+    ! need to figure out scatter to chunks situation and if that's allowed with time
+    ! Xmean = 0.0_r8
 
-      ! Assuming U(time,lon,lat,lev) dimension order
-      start = (/ itime, 1, 1, 1 /)
-      count = (/ 1, nlon, nlat, plev/)
-      
-      istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
-      if (istat /= NF90_NOERR) then
-        write(iulog,*) nf90_strerror(istat)
-        call endrun('UPDATE_ANALYSES_FV(U slab read)')
-      end if
+    ! U saved in lev, lat, lon, time order
+    start = (/ 1, 1, 1, t_indices(1) /)
+    count = (/ plev, nlat, nlon, Running_mean_win_size/)
 
-      Xmean = Xmean + w(iw) * Uslab
-    end do
+    istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
+    if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      write(iulog,*) 'itime, start, count ', itime, start, count
+      call endrun('UPDATE_ANALYSES_FV(U slab read)')
+    end if
 
-    ! Xmean(lon,lat,lev) is the weighted climatology for the date window.
+    ! do iw = 1, Running_mean_win_size
+    !   itime = t_indices(iw)
+    !   Xmean = Xmean + w(iw) * Uslab
+    ! end do
+    ! Xmean(lev,lat,lon) is the weighted climatology for the date window.
+
     do ilat = 1, nlat
       do ilev = 1, plev
         do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+          Xtrans(ilon, ilev, ilat) = Uslab(ilev, ilat, ilon, iw)
         end do
       end do
     end do
@@ -1533,8 +1643,8 @@ contains
       itime = t_indices(iw)
 
       ! Assuming U(time,lon,lat,lev) dimension order
-      start = (/ itime, 1, 1, 1 /)
-      count = (/ 1, nlon, nlat, plev/)
+      start = (/ 1, 1, 1, itime /)
+      count = (/ plev, nlat, nlon, 1/)
       
       istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
       if (istat /= NF90_NOERR) then
@@ -1549,7 +1659,7 @@ contains
     do ilat = 1, nlat
       do ilev = 1, plev
         do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+          Xtrans(ilon, ilev, ilat) = Xmean(ilev, ilat, ilon)
         end do
       end do
     end do
@@ -1570,8 +1680,8 @@ contains
       itime = t_indices(iw)
 
       ! Assuming U(time,lon,lat,lev) dimension order
-      start = (/ itime, 1, 1, 1 /)
-      count = (/ 1, nlon, nlat, plev/)
+      start = (/ 1, 1, 1, itime /)
+      count = (/ plev, nlat, nlon, 1/)
       
       istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
       if (istat /= NF90_NOERR) then
@@ -1586,7 +1696,7 @@ contains
     do ilat = 1, nlat
       do ilev = 1, plev
         do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+          Xtrans(ilon, ilev, ilat) = Xmean(ilev, ilat, ilon)
         end do
       end do
     end do
@@ -1607,8 +1717,8 @@ contains
       itime = t_indices(iw)
 
       ! Assuming U(time,lon,lat,lev) dimension order
-      start = (/ itime, 1, 1, 1 /)
-      count = (/ 1, nlon, nlat, plev/)
+      start = (/ 1, 1, 1, itime /)
+      count = (/ plev, nlat, nlon, 1/)
       
       istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
       if (istat /= NF90_NOERR) then
@@ -1623,7 +1733,7 @@ contains
     do ilat = 1, nlat
       do ilev = 1, plev
         do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Xmean(ilon, ilat, ilev)
+          Xtrans(ilon, ilev, ilat) = Xmean(ilev, ilat, ilon)
         end do
       end do
     end do
@@ -1909,6 +2019,13 @@ contains
    integer :: itime
    integer, dimension(4) :: start, count
 
+   ! calculate doy
+   integer, dimension(12) :: cum = (/ 0,31,59,90,120,151,181,212,243,273,304,334 /)
+   integer :: ndoys = 365
+   integer :: doy
+   integer :: ndims, dimids(4), dimlen, k, dimid
+   character(len=NF90_MAX_NAME) :: dimname
+
    ! Just read in one file but will select times inside it
    ! If the file is not there, then just return.
    !------------------------------------------------------------------------
@@ -1952,7 +2069,7 @@ contains
 
      ! allocate extra time variables
      allocate(Time_anal(ntime))
-     allocate(Uslab(Running_mean_nlon,Running_mean_nlat,plev)) ! using Xanal dimensions (lat,lev flipped)
+     allocate(Uslab(plev,Running_mean_nlat,Running_mean_nlon))
      allocate(w(Running_mean_win_size))
      allocate(t_indices(Running_mean_win_size))
 
@@ -1967,19 +2084,26 @@ contains
        call endrun ('UPDATE_ANALYSES_FV')
      endif
 
-    ! Convert requested Y-M-D to the same numeric "days since ..." as time_vals
-    ! (We avoid parsing units by matching to the nearest available entry via a helper.)
-    ! If you want exact conversion from units, extend the helper accordingly.
-    call find_nearest_time_index(Time_anal, target_month, target_day, it_center)
+     istat=nf90_close(ncid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_ANALYSES_FV')
+     endif
+
+    ! calculate doy for time index of file
+    doy = cum(target_month) + target_day
+    it_center = doy+1 !modulo(doy-1, ndoys) + 1
+    write(iulog,*) 'calculated it_center ', it_center
 
     ! Define a centered window
     half = (Running_mean_win_size - 1)/2
-    win_offsets = [(i, i=-half, half)] 
+    win_offsets = [(iw, iw=-half, half)] 
 
     ! Map offsets to legal indices with wrap-around (use modulo year logic). 
     do iw = 1, Running_mean_win_size
       t_indices(iw) = modulo(it_center - 1 + win_offsets(iw), ntime) + 1  ! Fortran 1-based, modulo wrap
     end do
+    write(iulog,*) 'calculated t_indices ', t_indices
 
     ! create weights. needs to be one of uniform, gaussian, or triangular
     select case (trim(Running_mean_weight_type))
@@ -2024,19 +2148,30 @@ contains
         call endrun ('UPDATE_ANALYSES_FV')
       endif
 
+      istat = nf90_inquire_variable(ncid, varid, ndims=ndims, dimids=dimids)
+      if(istat.ne.NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun ('UPDATE_ANALYSES_FV')
+      endif
+      do k=1, ndims
+        dimid = dimids(k)
+        istat = nf90_inquire_dimension(ncid, dimid, name=dimname, len=dimlen)
+        write(iulog,*) 'U dim', k, ':', trim(dimname), ' len=', dimlen
+      end do
+
       do iw = 1, Running_mean_win_size
         do ilat=1,nlat
         do ilev=1,plev
         do ilon=1,nlon
           ! weight the file by time within window
-          Uslab(ilon,ilat,ilev)=Xtrans(ilon,ilev,ilat)*w(iw)
+          Uslab(ilev,ilat,ilon)=Xtrans(ilon,ilev,ilat)*w(iw)
         end do
         end do
         end do
         ! write timestep to file
         itime = t_indices(iw)
-        start = (/ itime, 1, 1, 1 /)
-        count = (/ 1, nlon, nlat, plev/)
+        start = (/ 1, 1, 1, itime /)
+        count = (/ plev, nlat, nlon, 1/)
         istat = nf90_put_var(ncid, varid, Uslab, start=start, count=count)
         if(istat.ne.NF90_NOERR) then
           write(iulog,*) nf90_strerror(istat)
@@ -2044,8 +2179,17 @@ contains
         endif
 
       end do
-      call nf90_sync(ncid)
-      call nf90_close(ncid)
+      istat = nf90_sync(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
+
+      istat = nf90_close(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
     endif ! (masterproc) then
 
     call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Running_mean_V,Xtrans)
@@ -2068,22 +2212,31 @@ contains
         do ilev=1,plev
         do ilon=1,nlon
           ! weight the file by time within window
-          Uslab(ilon,ilat,ilev)=Xtrans(ilon,ilev,ilat)*w(iw)
+          Uslab(ilev,ilat,ilon)=Xtrans(ilon,ilev,ilat)*w(iw)
         end do
         end do
         end do
         ! write timestep to file
         itime = t_indices(iw)
-        start = (/ itime, 1, 1, 1 /)
-        count = (/ 1, nlon, nlat, plev/)
+        start = (/ 1, 1, 1, itime /)
+        count = (/ plev, nlat, nlon, 1/)
         istat = nf90_put_var(ncid, varid, Uslab, start=start, count=count)
         if(istat.ne.NF90_NOERR) then
           write(iulog,*) nf90_strerror(istat)
           call endrun ('UPDATE_ANALYSES_FV')
         endif
       end do
-      call nf90_sync(ncid)
-      call nf90_close(ncid)
+      istat = nf90_sync(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
+
+      istat = nf90_close(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
     endif ! (masterproc) then
 
     call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Running_mean_T,Xtrans)
@@ -2106,22 +2259,31 @@ contains
         do ilev=1,plev
         do ilon=1,nlon
           ! weight the file by time within window
-          Uslab(ilon,ilat,ilev)=Xtrans(ilon,ilev,ilat)*w(iw)
+          Uslab(ilev,ilat,ilon)=Xtrans(ilon,ilev,ilat)*w(iw)
         end do
         end do
         end do
         ! write timestep to file
         itime = t_indices(iw)
-        start = (/ itime, 1, 1, 1 /)
-        count = (/ 1, nlon, nlat, plev/)
+        start = (/ 1, 1, 1, itime /)
+        count = (/ plev, nlat, nlon, 1/)
         istat = nf90_put_var(ncid, varid, Uslab, start=start, count=count)
         if(istat.ne.NF90_NOERR) then
           write(iulog,*) nf90_strerror(istat)
           call endrun ('UPDATE_ANALYSES_FV')
         endif
       end do
-      call nf90_sync(ncid)
-      call nf90_close(ncid)
+      istat = nf90_sync(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
+
+      istat = nf90_close(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
     endif ! (masterproc) then
 
     call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Running_mean_Q,Xtrans)
@@ -2144,22 +2306,31 @@ contains
         do ilev=1,plev
         do ilon=1,nlon
           ! weight the file by time within window
-          Uslab(ilon,ilat,ilev)=Xtrans(ilon,ilev,ilat)*w(iw)
+          Uslab(ilev,ilat,ilon)=Xtrans(ilon,ilev,ilat)*w(iw)
         end do
         end do
         end do
         ! write timestep to file
         itime = t_indices(iw)
-        start = (/ itime, 1, 1, 1 /)
-        count = (/ 1, nlon, nlat, plev/)
+        start = (/ 1, 1, 1, itime /)
+        count = (/ plev, nlat, nlon, 1/)
         istat = nf90_put_var(ncid, varid, Uslab, start=start, count=count)
         if(istat.ne.NF90_NOERR) then
           write(iulog,*) nf90_strerror(istat)
           call endrun ('UPDATE_ANALYSES_FV')
         endif
       end do
-      call nf90_sync(ncid)
-      call nf90_close(ncid)
+      istat = nf90_sync(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
+
+      istat = nf90_close(ncid)
+      if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun('UPDATE_ANALYSES_FV')
+      endif
     endif ! (masterproc) then
 
    if (allocated(Time_anal)) deallocate(Time_anal)
@@ -2171,39 +2342,7 @@ contains
    !------------
    return
   end subroutine ! running_mean_write_model_fv
-  !================================================================
-
-  subroutine find_nearest_time_index(time_vals, mm, dd, idx)
-    real,    intent(in)  :: time_vals(:)
-    integer, intent(in)  :: mm, dd
-    integer, dimension(12) :: cum = (/ 0,31,59,90,120,151,181,212,243,273,304,334 /)
-    integer, intent(out) :: idx
-    ! Strategy: if the file is daily and covers a single year, we can map to DOY and
-    ! then pick that DOY (with clamp or wrap). Otherwise, pick the time entry whose
-    ! calendar date matches best by comparing to the list of dates you derive from
-    ! an origin. To keep this simple and robust for daily files, we do DOY.
-
-    integer :: doy, n
-    real :: target
-
-    doy = cum(mm) + dd
-    n = size(time_vals)
-
-    ! probably have to shift for 3-hourly data (though maybe I should save as hourly and with separate variables)
-    if (n >= 365) then
-      idx = modulo(doy-1, n) + 1   !  wrap
-    else
-      ! Fallback: nearest by numeric distance to the median time of requested DOY
-      ! (This path is rarely hit if you truly have daily data.)
-      
-      ! crude: assume time_vals are “days since” and Jan 1 is near integer boundary
-      target = real(doy - 1)
-      idx = 1 + minloc( abs(time_vals - target), dim=1 ) - 1
-    end if
-
-    ! TODO: make sure this works for 3-hourly data
-  end subroutine find_nearest_time_index
-
+  
   !================================================================
 
    character(len=cl) function interpret_filename_climo( filename_spec, case, &
@@ -2245,10 +2384,10 @@ contains
 
 
    if ( len_trim(filename_spec) == 0 )then
-      call endrun ('INTERPRET_FILENAME_SPEC: filename specifier is empty')
+      call endrun ('INTERPRET_FILENAME_CLIMO: filename specifier is empty')
    end if
    if ( index(trim(filename_spec)," ") /= 0 )then
-      call endrun ('INTERPRET_FILENAME_SPEC: filename specifier can not contain a space:'//trim(filename_spec))
+      call endrun ('INTERPRET_FILENAME_CLIMO: filename specifier can not contain a space:'//trim(filename_spec))
    end if
    !
    ! Determine month, day and sec to put in filename
@@ -2282,7 +2421,7 @@ contains
          case( '%' )   ! percent character
             string = "%"
          case default
-            call endrun ('INTERPRET_FILENAME_SPEC: Invalid expansion character: '//filename_spec(i:i))
+            call endrun ('INTERPRET_FILENAME_CLIMO: Invalid expansion character: '//filename_spec(i:i))
          end select
          !
          ! Otherwise take normal text up to the next "%" character
@@ -2298,7 +2437,7 @@ contains
         interpret_filename_climo = trim(string)
       else
          if ( (len_trim(interpret_filename_climo)+len_trim(string)) >= cl )then
-            call endrun ('INTERPRET_FILENAME_SPEC: Resultant filename too long')
+            call endrun ('INTERPRET_FILENAME_CLIMO: Resultant filename too long')
          end if
          interpret_filename_climo = trim(interpret_filename_climo) // trim(string)
       end if
@@ -2306,7 +2445,7 @@ contains
 
    end do
    if ( len_trim(interpret_filename_climo) == 0 )then
-      call endrun ('INTERPRET_FILENAME_SPEC: Resulting filename is empty')
+      call endrun ('INTERPRET_FILENAME_CLIMO: Resulting filename is empty')
    end if
 
 end function interpret_filename_climo
