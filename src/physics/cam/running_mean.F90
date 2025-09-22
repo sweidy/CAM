@@ -1100,7 +1100,7 @@ contains
       endif
 
       ! write model is where the running mean is updated
-      call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Running_mean_Curr_Day) 
+      call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Model_Curr_Day) 
 
       if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
      
@@ -1110,7 +1110,7 @@ contains
 
      ! update is where the nudging value is updated (reading from recently written value)
      !----------------------------------------------------------
-    call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Running_mean_Curr_Day)
+    call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Model_Curr_Day)
 
     do lchnk=begchunk,endchunk
         ncol=phys_state(lchnk)%ncol
@@ -1451,7 +1451,7 @@ contains
 
     ! calculate doy for time index of file
     doy = cum(target_month) + target_day
-    it_center = doy+1 !modulo(doy-1, ndoys) + 1
+    it_center = doy !modulo(doy-1, ndoys) + 1
     write(iulog,*) 'calculated it_center ', it_center
 
     start = (/ 1, 1, 1, it_center /)
@@ -1967,8 +1967,9 @@ contains
 
     ! calculate doy for time index of file
     doy = cum(target_month) + target_day
-    it_center = doy+1 !modulo(doy-1, ndoys) + 1
-    write(iulog,*) 'calculated it_center ', it_center
+    it_center = doy !modulo(doy-1, ndoys) + 1
+    write(iulog,*) 'target month, target day ', target_month, target_day
+    write(iulog,*) 'calculated doy, it_center ', doy, it_center
 
     ! Define a centered window
     half = (Running_mean_win_size - 1)/2
@@ -1994,7 +1995,7 @@ contains
           nstep_new = max(0, nstep_old) + 1 ! maybe this is one too many but tbd
         endif
         wrk = 1.0_r8 / real(nstep_new, r8)
-        write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
+        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
         ! update array with new nstep
         nstep_array(itime) = nstep_new
 
@@ -2005,17 +2006,17 @@ contains
           write(iulog,*) nf90_strerror(istat)
           call endrun ('UPDATE_ANALYSES_FV')
         endif
-        ! check dimensions for debugging
-        istat = nf90_inquire_variable(ncid, varid, ndims=ndims, dimids=dimids)
-        if(istat.ne.NF90_NOERR) then
-          write(iulog,*) nf90_strerror(istat)
-          call endrun ('UPDATE_ANALYSES_FV')
-        endif
-        do k=1, ndims
-          dimid = dimids(k)
-          istat = nf90_inquire_dimension(ncid, dimid, name=dimname, len=dimlen)
-          write(iulog,*) 'U dim', k, ':', trim(dimname), ' len=', dimlen
-        end do
+        ! ! check dimensions for debugging
+        ! istat = nf90_inquire_variable(ncid, varid, ndims=ndims, dimids=dimids)
+        ! if(istat.ne.NF90_NOERR) then
+        !   write(iulog,*) nf90_strerror(istat)
+        !   call endrun ('UPDATE_ANALYSES_FV')
+        ! endif
+        ! do k=1, ndims
+        !   dimid = dimids(k)
+        !   istat = nf90_inquire_dimension(ncid, dimid, name=dimname, len=dimlen)
+        !   write(iulog,*) 'U dim', k, ':', trim(dimname), ' len=', dimlen
+        ! end do
         ! read in old running mean
         istat = nf90_get_var(ncid, varid, Uslab_old, start=start, count=count)
         if (istat /= NF90_NOERR) then
@@ -2051,7 +2052,7 @@ contains
         itime = t_indices(iw)
         nstep_new = nstep_array(itime)
         wrk = 1.0_r8 / real(nstep_new, r8)
-        write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
+        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
 
         ! open file and find V variable
         start = (/ 1, 1, 1, itime /)
@@ -2095,7 +2096,7 @@ contains
         itime = t_indices(iw)
         nstep_new = nstep_array(itime)
         wrk = 1.0_r8 / real(nstep_new, r8)
-        write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
+        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
 
         ! open file and find V variable
         start = (/ 1, 1, 1, itime /)
@@ -2139,7 +2140,7 @@ contains
         itime = t_indices(iw)
         nstep_new = nstep_array(itime)
         wrk = 1.0_r8 / real(nstep_new, r8)
-        write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
+        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
 
         ! open file and find V variable
         start = (/ 1, 1, 1, itime /)
