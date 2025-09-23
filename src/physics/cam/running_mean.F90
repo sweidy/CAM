@@ -248,6 +248,10 @@ module running_mean
   integer          :: Running_mean_Next_Year,Running_mean_Next_Month
   integer          :: Running_mean_Next_Day ,Running_mean_Next_Sec
   integer          :: Running_mean_Step
+  integer          :: Target_Curr_Year,Target_Curr_Month
+  integer          :: Target_Curr_Day ,Target_Curr_Sec
+  integer          :: Target_Next_Year,Target_Next_Month
+  integer          :: Target_Next_Day ,Target_Next_Sec
   integer          :: Model_Curr_Year,Model_Curr_Month
   integer          :: Model_Curr_Day ,Model_Curr_Sec
   integer          :: Model_Next_Year,Model_Next_Month
@@ -730,6 +734,10 @@ contains
        Running_mean_Next_Month=Month
        Running_mean_Next_Day  =Day
        Running_mean_Next_Sec  =(Sec/Running_mean_Step)*Running_mean_Step
+       Target_Next_Year =Year
+       Target_Next_Month=Month
+       Target_Next_Day  =Day
+       Target_Next_Sec  =(Sec/Running_mean_Step)*Running_mean_Step
      elseif(.not.After_Beg) then
        ! Set Time indicies to running_mean start,
        ! timestep_init will initialize the data arrays.
@@ -742,6 +750,10 @@ contains
        Running_mean_Next_Month=Running_mean_Beg_Month
        Running_mean_Next_Day  =Running_mean_Beg_Day
        Running_mean_Next_Sec  =Running_mean_Beg_Sec
+       Target_Next_Year =Running_mean_Beg_Year
+       Target_Next_Month=Running_mean_Beg_Month
+       Target_Next_Day  =Running_mean_Beg_Day
+       Target_Next_Sec  =Running_mean_Beg_Sec
      elseif(.not.Before_End) then
        ! running_mean will never occur, so switch it off
        !--------------------------------------------
@@ -870,6 +882,10 @@ contains
    call mpibcast(Running_mean_Next_Month    ,            1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Next_Day      ,            1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Next_Sec      ,            1, mpiint, 0, mpicom)
+   call mpibcast(Target_Next_Year     ,            1, mpiint, 0, mpicom)
+   call mpibcast(Target_Next_Month    ,            1, mpiint, 0, mpicom)
+   call mpibcast(Target_Next_Day      ,            1, mpiint, 0, mpicom)
+   call mpibcast(Target_Next_Sec      ,            1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Model         ,            1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_ON            ,            1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_Initialized   ,            1, mpilog, 0, mpicom)
@@ -900,13 +916,13 @@ contains
    ! TODO: this is not the right file to read -- use the previous timestep
    !---------------------------------------------------------------
    
-   modstep=int(Running_mean_Next_Sec / 10800)
+   modstep=int(Target_Next_Sec / 10800)
 
    Target_File=interpret_filename_climo(Target_File_Template      , &
-          mon_spec=Running_mean_Next_Month, &
-          day_spec=Running_mean_Next_Day  , &
+          mon_spec=Target_Next_Month, &
+          day_spec=Target_Next_Day  , &
           hr_spec=modstep, &
-          sec_spec=Running_mean_Next_Sec    )
+          sec_spec=Target_Next_Sec    )
    if(masterproc) then
     write(iulog,*) 'running_mean: Reading analyses:',trim(Target_Path)//trim(Target_File)
    endif
@@ -993,7 +1009,7 @@ contains
    !----------------
    integer Year,Month,Day,Sec
    integer YMD1,YMD2,YMD
-   logical Update_Model,Update_Running_mean,Sync_Error
+   logical Update_Model,Update_Running_mean,Update_Target,Sync_Error
    logical After_Beg   ,Before_End
    integer lchnk,ncol,indw
 
@@ -1071,6 +1087,32 @@ contains
      Model_Next_Month=(YMD2/100)
      Model_Next_Day  = YMD2-(Model_Next_Month*100)
 
+     ! Increment the Running mean file times by the current interval
+     !---------------------------------------------------
+     ! only every 6 hours
+     YMD1=(Running_mean_Next_Year*10000) + (Running_mean_Next_Month*100) + Running_mean_Next_Day
+     call timemgr_time_ge(YMD1,Running_mean_Next_Sec,            &
+                        YMD ,Sec           ,Update_Running_mean)
+     if(Update_Running_mean) then
+      Running_mean_Curr_Year =Running_mean_Next_Year
+      Running_mean_Curr_Month=Running_mean_Next_Month
+      Running_mean_Curr_Day  =Running_mean_Next_Day
+      Running_mean_Curr_Sec  =Running_mean_Next_Sec
+      YMD1=(Running_mean_Curr_Year*10000) + (Running_mean_Curr_Month*100) + Running_mean_Curr_Day
+      call timemgr_time_inc(YMD1,Running_mean_Curr_Sec,              &
+                            YMD2,Running_mean_Next_Sec,Running_mean_Step,0,0)
+
+      Running_mean_Next_Year =(YMD2/10000)
+      YMD2            = YMD2-(Running_mean_Next_Year*10000)
+      Running_mean_Next_Month=(YMD2/100)
+      Running_mean_Next_Day  = YMD2-(Running_mean_Next_Month*100)
+
+      if(masterproc) then
+        write(iulog,*) 'Updated running mean time', Running_mean_Curr_Day, Running_mean_Curr_Sec
+      endif
+     end if ! Update_Running_Mean
+
+
      ! Load values at Current into the Model arrays
      !-----------------------------------------------
      
@@ -1091,16 +1133,19 @@ contains
       end do
 
       Running_mean_File=interpret_filename_spec(Running_mean_File_Template      , &
-                                        sec_spec=Model_Curr_Sec    )
+                                        yr_spec=Running_mean_Curr_Year, &
+                                        mon_spec=Running_mean_Curr_Month, &
+                                        day_spec=Running_mean_Curr_Day  , &
+                                        sec_spec=Running_mean_Curr_Sec    )
       INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
-      
+    
       if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
       if(masterproc) then
         write(iulog,*) 'running_mean: Writing to file:',trim(Running_mean_Path)//trim(Running_mean_File)
       endif
 
       ! write model is where the running mean is updated
-      call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Model_Curr_Day) 
+      call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Running_mean_Curr_Month, Running_mean_Curr_Day) 
 
       if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
      
@@ -1110,7 +1155,7 @@ contains
 
      ! update is where the nudging value is updated (reading from recently written value)
      !----------------------------------------------------------
-    call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Model_Curr_Month, Model_Curr_Day)
+    call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Running_mean_Curr_Month, Running_mean_Curr_Day)
 
     do lchnk=begchunk,endchunk
         ncol=phys_state(lchnk)%ncol
@@ -1122,33 +1167,33 @@ contains
    !----------------------------------------------------------------
    ! When past the NEXT time, Update running_mean Arrays and time indices
    !----------------------------------------------------------------
-   YMD1=(Running_mean_Next_Year*10000) + (Running_mean_Next_Month*100) + Running_mean_Next_Day
-   call timemgr_time_ge(YMD1,Running_mean_Next_Sec,            &
-                        YMD ,Sec           ,Update_Running_mean)
+   YMD1=(Target_Next_Year*10000) + (Target_Next_Month*100) + Target_Next_Day
+   call timemgr_time_ge(YMD1,Target_Next_Sec,            &
+                        YMD ,Sec           ,Update_Target)
 
-   if((Before_End).and.(Update_Running_mean)) then
+   if((Before_End).and.(Update_Target)) then
      ! Increment the Running_mean times by the current interval
      !---------------------------------------------------
-     Running_mean_Curr_Year =Running_mean_Next_Year
-     Running_mean_Curr_Month=Running_mean_Next_Month
-     Running_mean_Curr_Day  =Running_mean_Next_Day
-     Running_mean_Curr_Sec  =Running_mean_Next_Sec
-     YMD1=(Running_mean_Curr_Year*10000) + (Running_mean_Curr_Month*100) + Running_mean_Curr_Day
-     call timemgr_time_inc(YMD1,Running_mean_Curr_Sec,              &
-                           YMD2,Running_mean_Next_Sec,Running_mean_Step,0,0)
-     Running_mean_Next_Year =(YMD2/10000)
-     YMD2            = YMD2-(Running_mean_Next_Year*10000)
-     Running_mean_Next_Month=(YMD2/100)
-     Running_mean_Next_Day  = YMD2-(Running_mean_Next_Month*100)
+     Target_Curr_Year =Target_Next_Year
+     Target_Curr_Month=Target_Next_Month
+     Target_Curr_Day  =Target_Next_Day
+     Target_Curr_Sec  =Target_Next_Sec
+     YMD1=(Target_Curr_Year*10000) + (Target_Curr_Month*100) + Target_Curr_Day
+     call timemgr_time_inc(YMD1,Target_Curr_Sec,              &
+                           YMD2,Target_Next_Sec,Running_mean_Step,0,0)
+     Target_Next_Year =(YMD2/10000)
+     YMD2            = YMD2-(Target_Next_Year*10000)
+     Target_Next_Month=(YMD2/100)
+     Target_Next_Day  = YMD2-(Target_Next_Month*100)
 
      ! Set the analysis filename at the NEXT time. (MERRA)
      !---------------------------------------------------------------
-     modstep=int(Running_mean_Next_Sec / 10800)
+     modstep=int(Target_Next_Sec / 10800)
      Target_File=interpret_filename_climo(Target_File_Template      , &
-          mon_spec=Running_mean_Next_Month, &
-          day_spec=Running_mean_Next_Day  , &
+          mon_spec=Target_Next_Month, &
+          day_spec=Target_Next_Day  , &
           hr_spec=modstep, &
-          sec_spec=Running_mean_Next_Sec    )
+          sec_spec=Target_Next_Sec    )
 
       if(masterproc) then
         write(iulog,*) trim(Target_Path)//trim(Target_File)
@@ -1159,7 +1204,7 @@ contains
 
      !----------------------------------------------------------
     call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
-   endif ! ((Before_End).and.(Update_Running_mean)) then
+   endif ! ((Before_End).and.(Update_Target)) then
 
    !----------------------------------------------------------------
    ! Toggle running_mean flag when the time interval is between 
@@ -1174,7 +1219,7 @@ contains
    !---------------------------------------------------
    ! If Data arrays have changed update stepping arrays
    !---------------------------------------------------
-   if((Before_End).and.((Update_Running_mean).or.(Update_Model))) then
+   if((Before_End).and.((Update_Running_mean).or.(Update_Model).or.(Update_Target))) then
 
      ! Now Load the Target values for running_mean tendencies
      !---------------------------------------------------
@@ -1194,8 +1239,8 @@ contains
        Tscale=1._r8
      elseif(Running_mean_TimeScale_Opt.eq.1) then
        call ESMF_TimeSet(Date1,YY=Year,MM=Month,DD=Day,S=Sec)
-       call ESMF_TimeSet(Date2,YY=Running_mean_Next_Year,MM=Running_mean_Next_Month, &
-                               DD=Running_mean_Next_Day , S=Running_mean_Next_Sec    )
+       call ESMF_TimeSet(Date2,YY=Target_Next_Year,MM=Target_Next_Month, &
+                               DD=Target_Next_Day , S=Target_Next_Sec    )
        DateDiff =Date2-Date1
        call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
        Tscale=float(Running_mean_Step)/float(DeltaT)
@@ -1223,7 +1268,7 @@ contains
      end do
 
      if (masterproc) then
-        write(iulog,*) 'day, sec', Running_mean_Curr_Day, Running_mean_Curr_Sec
+        write(iulog,*) 'day, sec', Target_Curr_Day, Target_Curr_Sec
         write(iulog,*) 'Running_mean_Utau(1,20,1) = ', Running_mean_Utau(1,20,begchunk)
         write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
         write(iulog,*) 'Model_U(1,20,1) = ', Model_U(1,20,begchunk)
@@ -1244,7 +1289,7 @@ contains
 !      write(iulog,*) 'PFC: Running_mean_Sstep(1,:pver,begchunk)=',Running_mean_Sstep(1,:pver,begchunk)
 !      write(iulog,*) 'PFC: Running_mean_Xstep arrays updated:'
 !    endif
-   endif ! ((Before_End).and.((Update_Running_mean).or.(Update_Model))) then
+   endif ! ((Before_End).and.((Update_Running_mean).or.(Update_Model).or.(Update_Target))) then
 
    ! End Routine
    !------------
@@ -1979,7 +2024,6 @@ contains
     do iw = 1, Running_mean_win_size
       t_indices(iw) = modulo(it_center - 1 + win_offsets(iw), ntime) + 1  ! Fortran 1-based, modulo wrap
     end do
-    write(iulog,*) 'calculated t_indices ', t_indices
     endif ! masterproc
 
     call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Model_U,Xmodel)
