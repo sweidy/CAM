@@ -210,7 +210,7 @@ module running_mean
   implicit none
   private
 
-  public:: Running_mean_Model,Running_mean_ON
+  public:: Running_mean_Model,Running_mean_ON, Running_mean_nudge_ON
   public:: running_mean_readnl
   public:: running_mean_init
   public:: running_mean_timestep_init
@@ -225,6 +225,7 @@ module running_mean
   !--------------------
   logical          :: Running_mean_Model       =.false.
   logical          :: Running_mean_ON          =.false.
+  logical          :: Running_mean_nudge_ON    =.false.
   logical          :: Running_mean_Initialized =.false.
   character(len=cl):: Target_Path
   character(len=cs):: Target_File,Target_File_Template
@@ -243,6 +244,8 @@ module running_mean
   integer          :: Running_mean_Beg_Day  ,Running_mean_Beg_Sec
   integer          :: Running_mean_End_Year ,Running_mean_End_Month
   integer          :: Running_mean_End_Day  ,Running_mean_End_Sec
+  integer          :: Running_mean_nudge_Beg_Day, Running_mean_nudge_Beg_Month
+  integer          :: Running_mean_nudge_Beg_Year, Running_mean_nudge_Beg_Sec
   integer          :: Running_mean_Curr_Year,Running_mean_Curr_Month
   integer          :: Running_mean_Curr_Day ,Running_mean_Curr_Sec
   integer          :: Running_mean_Next_Year,Running_mean_Next_Month
@@ -278,7 +281,7 @@ module running_mean
   real(r8)         :: Running_mean_Hwin_max
   real(r8)         :: Running_mean_Hwin_min
   integer          :: Running_mean_win_size
-  character(len=10) :: Running_mean_weight_type
+  integer          :: Running_mean_nstep_max
 
   ! running_mean State Arrays
   !-----------------------
@@ -314,8 +317,14 @@ module running_mean
 
   ! running_mean Observation Arrays
   !-----------------------------
-  logical :: Target_File_Present
-  logical :: Running_mean_File_Present
+  integer               Running_mean_NumObs
+  integer,allocatable:: Running_mean_ObsInd(:)
+  logical,allocatable:: Target_File_Present(:)  
+  logical            :: Running_mean_File_Present
+  real(r8),allocatable::Nobs_U (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
+  real(r8),allocatable::Nobs_V (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
+  real(r8),allocatable::Nobs_T (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
+  real(r8),allocatable::Nobs_Q (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
 
 contains
   !================================================================
@@ -348,6 +357,7 @@ contains
                          Running_mean_Tcoef ,Running_mean_Tprof,                     &
                          Running_mean_Beg_Year,Running_mean_Beg_Month,Running_mean_Beg_Day, &
                          Running_mean_End_Year,Running_mean_End_Month,Running_mean_End_Day, &
+                         Running_mean_nudge_Beg_Year,Running_mean_nudge_Beg_Month,Running_mean_nudge_Beg_Day, &
                          Running_mean_Hwin_lat0,Running_mean_Hwin_lon0,              &
                          Running_mean_Hwin_latWidth,Running_mean_Hwin_lonWidth,      &
                          Running_mean_Hwin_latDelta,Running_mean_Hwin_lonDelta,      &
@@ -355,15 +365,17 @@ contains
                          Running_mean_Vwin_Lindex,Running_mean_Vwin_Hindex,          &
                          Running_mean_Vwin_Ldelta,Running_mean_Vwin_Hdelta,          &
                          Running_mean_Vwin_Invert,                            &
-                         Running_mean_win_size, Running_mean_weight_type 
+                         Running_mean_win_size, Running_mean_nstep_max
 
    ! running_mean is NOT initialized yet, For now
    ! running_mean will always begin/end at midnight.
    !--------------------------------------------
    Running_mean_Initialized =.false.
    Running_mean_ON          =.false.
+   Running_mean_nudge_ON    =.false.
    Running_mean_Beg_Sec=0
    Running_mean_End_Sec=0
+   Running_mean_nudge_Beg_Sec=0
 
    ! Set Default Namelist values
    !-----------------------------
@@ -388,6 +400,9 @@ contains
    Running_mean_Beg_Year      = 1980
    Running_mean_Beg_Month     = 1
    Running_mean_Beg_Day       = 1
+   Running_mean_nudge_Beg_Year      = 1980
+   Running_mean_nudge_Beg_Month     = 1
+   Running_mean_nudge_Beg_Day       = 1
    Running_mean_End_Year      = 2019
    Running_mean_End_Month     = 12
    Running_mean_End_Day       = 31
@@ -407,9 +422,8 @@ contains
    Running_mean_Vwin_Invert   = .false.
    Running_mean_Vwin_lo       = 0.0_r8
    Running_mean_Vwin_hi       = 1.0_r8
-   Running_mean_win_size           = 15
-   Running_mean_weight_type        = 'uniform'
-
+   Running_mean_win_size      = 15
+   Running_mean_nstep_max     = 500 ! when to stop accumulating mean
 
    ! Read in namelist values
    !------------------------
@@ -488,20 +502,16 @@ contains
      call endrun('running_mean_readnl:: ERROR in namelist')
    endif
 
-   if ( (trim(Running_mean_weight_type) /= "uniform") .and. &
-      (trim(Running_mean_weight_type) /= "gaussian") .and. &
-      (trim(Running_mean_weight_type) /= "triangular") ) then
-
-     write(iulog,*) "running_mean: Invalid Running_mean_weight_type specified"
-     write(iulog,*) "running_mean: Running_mean_weight_type = ", trim(Running_mean_weight_type)
-     write(iulog,*) "running_mean: Must be one of: 'uniform', 'gaussian', 'triangular'"
-     call endrun("running_mean_readnl:: ERROR in namelist (invalid Running_mean_weight_type)")
-   end if
-
    if (Running_mean_win_size < 1 .or. mod(Running_mean_win_size,2) /= 1) then
      write(iulog,*) "running_mean: Invalid Running_mean_win_size specified"
      write(iulog,*) "running_mean: Running_mean_win_size must be positive and odd"
      call endrun("running_mean_readnl:: ERROR in namelist (invalid Running_mean_win_size)")
+   end if
+
+   if (Running_mean_nstep_max < 1) then
+     write(iulog,*) "running_mean: Invalid Running_mean_nstep_max specified"
+     write(iulog,*) "running_mean: Running_mean_nstep_max must be greater than 1"
+     call endrun("running_mean_readnl:: ERROR in namelist (invalid Running_mean_nstep_max)")
    end if
 
    ! Broadcast namelist variables
@@ -514,6 +524,7 @@ contains
    call mpibcast(Running_mean_Model        , 1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_Initialized  , 1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_ON           , 1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_nudge_ON     , 1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_Force_Opt    , 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_TimeScale_Opt, 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_TSmode       , 1, mpiint, 0, mpicom)
@@ -535,6 +546,10 @@ contains
    call mpibcast(Running_mean_End_Month    , 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_End_Day      , 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_End_Sec      , 1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nudge_Beg_Year     , 1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nudge_Beg_Month    , 1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nudge_Beg_Day      , 1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nudge_Beg_Sec      , 1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_Hwin_lo      , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Hwin_hi      , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Hwin_lat0    , 1, mpir8 , 0, mpicom)
@@ -551,8 +566,8 @@ contains
    call mpibcast(Running_mean_Vwin_Lindex  , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vwin_Ldelta  , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vwin_Invert,   1, mpilog, 0, mpicom)
-   call mpibcast(Running_mean_win_size,   1, mpilog, 0, mpicom)
-   call mpibcast(Running_mean_weight_type,   1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_win_size,      1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_nstep_max,     1, mpilog, 0, mpicom)
 #endif
 
    ! End Routine
@@ -759,6 +774,7 @@ contains
        !--------------------------------------------
        Running_mean_Model=.false.
        Running_mean_ON   =.false.
+       Running_mean_nudge_ON=.false.
        write(iulog,*) ' '
        write(iulog,*) 'running_mean: WARNING - running_mean has been requested by it will'
        write(iulog,*) 'running_mean:           never occur for the given time values'
@@ -797,7 +813,27 @@ contains
                         (Val1_n*Val2_n*Val3_n*Val4_n), &
                         (Val1_n*Val2_n*Val3_p*Val4_p))
 
-     Target_File_Present=.false.
+     ! Initialize number of nudging observation values to keep track of.
+     ! Allocate and initialize observation indices 
+     !-----------------------------------------------------------------
+     if((Running_mean_Force_Opt.ge.0).and.(Running_mean_Force_Opt.le.1)) then
+       Running_mean_NumObs=2 ! TODO: is this correct? 
+     else
+       ! Additional Options may need OBS values at more times.
+       !------------------------------------------------------
+       Running_mean_NumObs=2
+       write(iulog,*) 'NUDGING: Setting Running_mean_NumObs=2'
+       write(iulog,*) 'NUDGING: WARNING: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
+       call endrun('NUDGING: Unknown Forcing Option')
+     endif
+     allocate(Running_mean_ObsInd(Running_mean_NumObs),stat=istat)
+     call alloc_err(istat,'running_mean_init','Running_mean_ObsInd',Running_mean_NumObs)
+     allocate(Target_File_Present(Running_mean_NumObs),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_File_Present',Running_mean_NumObs)
+     do nn=1,Running_mean_NumObs
+       Running_mean_ObsInd(nn) = Running_mean_NumObs+1-nn
+     end do
+     Target_File_Present(:)=.false.
      Running_mean_File_Present=.false.
 
      ! Initialization is done, 
@@ -844,6 +880,9 @@ contains
      write(iulog,*) 'running_mean: Running_mean_End_Year =',Running_mean_End_Year
      write(iulog,*) 'running_mean: Running_mean_End_Month=',Running_mean_End_Month
      write(iulog,*) 'running_mean: Running_mean_End_Day  =',Running_mean_End_Day
+     write(iulog,*) 'running_mean: Running_mean_nudge_Beg_Year =',Running_mean_nudge_Beg_Year
+     write(iulog,*) 'running_mean: Running_mean_nudge_Beg_Month=',Running_mean_nudge_Beg_Month
+     write(iulog,*) 'running_mean: Running_mean_nudge_Beg_Day  =',Running_mean_nudge_Beg_Day
      write(iulog,*) 'running_mean: Running_mean_Hwin_lat0     =',Running_mean_Hwin_lat0
      write(iulog,*) 'running_mean: Running_mean_Hwin_latWidth =',Running_mean_Hwin_latWidth
      write(iulog,*) 'running_mean: Running_mean_Hwin_latDelta =',Running_mean_Hwin_latDelta
@@ -865,6 +904,8 @@ contains
      write(iulog,*) 'running_mean: Running_mean_Hwin_max      =',Running_mean_Hwin_max
      write(iulog,*) 'running_mean: Running_mean_Hwin_min      =',Running_mean_Hwin_min
      write(iulog,*) 'running_mean: Running_mean_Initialized   =',Running_mean_Initialized
+     write(iulog,*) ' '
+     write(iulog,*) 'running_mean: Running_mean_NumObs=',Running_mean_NumObs
      write(iulog,*) ' '
 
    endif ! (masterproc) then
@@ -897,7 +938,38 @@ contains
    call mpibcast(Running_mean_Hwin_min      ,            1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Hwin_lonWidthH,            1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Hwin_latWidthH,            1, mpir8 , 0, mpicom)
+   call mpibcast(Running_mean_NumObs        ,            1, mpiint, 0, mpicom)
 #endif
+
+! All non-masterproc processes also need to allocate space
+   ! before the broadcast of Running_mean_NumObs dependent data.
+   !------------------------------------------------------------
+   if(.not.masterproc) then
+     allocate(Running_mean_ObsInd(Running_mean_NumObs),stat=istat)
+     call alloc_err(istat,'running_mean_init','Running_mean_ObsInd',Running_mean_NumObs)
+     allocate(Target_File_Present(Running_mean_NumObs),stat=istat)
+     call alloc_err(istat,'running_mean_init','Target_File_Present',Running_mean_NumObs)
+   endif
+#ifdef SPMD
+   call mpibcast(Running_mean_ObsInd        , Running_mean_NumObs, mpiint, 0, mpicom)
+   call mpibcast(Target_File_Present  , Running_mean_NumObs, mpilog, 0, mpicom)
+#endif
+
+   ! Allocate Space for Nudging observation arrays, initialize with 0's
+   !---------------------------------------------------------------------
+   allocate(Nobs_U(pcols,pver,begchunk:endchunk,Running_mean_NumObs),stat=istat)
+   call alloc_err(istat,'running_mean_init','Nobs_U',pcols*pver*((endchunk-begchunk)+1)*Running_mean_NumObs)
+   allocate(Nobs_V(pcols,pver,begchunk:endchunk,Running_mean_NumObs),stat=istat)
+   call alloc_err(istat,'running_mean_init','Nobs_V',pcols*pver*((endchunk-begchunk)+1)*Running_mean_NumObs)
+   allocate(Nobs_T(pcols,pver,begchunk:endchunk,Running_mean_NumObs),stat=istat)
+   call alloc_err(istat,'running_mean_init','Nobs_T',pcols*pver*((endchunk-begchunk)+1)*Running_mean_NumObs)
+   allocate(Nobs_Q(pcols,pver,begchunk:endchunk,Running_mean_NumObs),stat=istat)
+   call alloc_err(istat,'running_mean_init','Nobs_Q',pcols*pver*((endchunk-begchunk)+1)*Running_mean_NumObs)
+
+   Nobs_U(:pcols,:pver,begchunk:endchunk,:Running_mean_NumObs)=0._r8
+   Nobs_V(:pcols,:pver,begchunk:endchunk,:Running_mean_NumObs)=0._r8
+   Nobs_T(:pcols,:pver,begchunk:endchunk,:Running_mean_NumObs)=0._r8
+   Nobs_Q(:pcols,:pver,begchunk:endchunk,:Running_mean_NumObs)=0._r8
 
 
 !!DIAG
@@ -907,6 +979,8 @@ contains
      write(iulog,*) 'running_mean: running_mean_init() MB:',float(8*9*pcols*pver*((endchunk-begchunk)+1))/(1024._r8*1024._r8)
      write(iulog,*) 'running_mean: running_mean_init() pcols=',pcols,' pver=',pver
      write(iulog,*) 'running_mean: running_mean_init() begchunk:',begchunk,' endchunk=',endchunk
+     write(iulog,*) 'running_mean: running_mean_init() chunk:',(endchunk-begchunk+1),' Running_mean_NumObs=',Running_mean_NumObs
+     write(iulog,*) 'running_mean: running_mean_init() Running_mean_ObsInd=',Running_mean_ObsInd
      write(iulog,*) 'running_mean: running_mean_init() Running_mean_File_Present=',Running_mean_File_Present
      write(iulog,*) 'running_mean: running_mean_init() Target_File_Present=',Target_File_Present
    endif
@@ -929,6 +1003,10 @@ contains
 
    !----------------------------------------------------------
 
+   ! Rotate Running_mean_ObsInd() indices for new data, then update 
+   ! the Target observation arrays with analysis data at the 
+   ! NEXT==Running_mean_ObsInd(1) time.
+   !----------------------------------------------------------
     call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
 
    ! Initialize running_mean Coeffcient profiles in local arrays
@@ -1010,7 +1088,7 @@ contains
    integer Year,Month,Day,Sec
    integer YMD1,YMD2,YMD
    logical Update_Model,Update_Running_mean,Update_Target,Sync_Error
-   logical After_Beg   ,Before_End
+   logical After_Beg   ,Before_End, After_nudge_Beg
    integer lchnk,ncol,indw
 
    type(ESMF_Time)         Date1,Date2
@@ -1048,6 +1126,10 @@ contains
    YMD1=(Running_mean_End_Year*10000) + (Running_mean_End_Month*100) + Running_mean_End_Day
    call timemgr_time_ge(YMD ,Sec,                    &
                         YMD1,Running_mean_End_Sec,Before_End)
+   ! whether to nudge with the running mean yet
+   YMD1=(Running_mean_nudge_Beg_Year*10000) + (Running_mean_nudge_Beg_Month*100) + Running_mean_nudge_Beg_Day
+   call timemgr_time_ge(YMD1,Running_mean_nudge_Beg_Sec,         &
+                        YMD ,Sec          ,After_nudge_Beg)
 
    !--------------------------------------------------------------
    ! When past the NEXT time, Update Model Arrays and time indices
@@ -1147,11 +1229,11 @@ contains
       ! write model is where the running mean is updated
       call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Running_mean_Curr_Month, Running_mean_Curr_Day) 
 
-      if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
+    !   if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
      
-     if(masterproc) then
-      write(iulog,*) 'running_mean: Reading analyses:',trim(Running_mean_Path)//trim(Running_mean_File)
-     endif
+    !  if(masterproc) then
+    !   write(iulog,*) 'running_mean: Reading analyses:',trim(Running_mean_Path)//trim(Running_mean_File)
+    !  endif
 
      ! update is where the nudging value is updated (reading from recently written value)
      !----------------------------------------------------------
@@ -1199,21 +1281,63 @@ contains
         write(iulog,*) trim(Target_Path)//trim(Target_File)
       endif
       
-      INQUIRE(FILE=trim(Target_Path)//trim(Target_File), EXIST=Target_File_Present)
-      if (.not. Target_File_Present) print*, 'running_mean target file missing', Target_File
+      INQUIRE(FILE=trim(Target_Path)//trim(Target_File), EXIST=Target_File_Present(Running_mean_ObsInd(1)))
+      if (.not. Target_File_Present(Running_mean_ObsInd(1))) print*, 'running_mean target file missing', Target_File
 
      !----------------------------------------------------------
+   ! Rotate Running_mean_ObsInd() indices for new data, then update 
+   ! the Target observation arrays with analysis data at the 
+   ! NEXT==Running_mean_ObsInd(1) time.
+   !----------------------------------------------------------
     call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
    endif ! ((Before_End).and.(Update_Target)) then
 
+
+    !----------------------------------------------------------------
+   ! Toggle Running_mean nudge flag when the time interval is between 
+   ! beginning and ending times, and all of the analyses files exist.
+   !----------------------------------------------------------------
+   if((After_Beg).and.(Before_End)) then
+     if(Running_mean_Force_Opt.eq.0) then
+       ! Verify that the NEXT analyses are available
+       !---------------------------------------------
+       Running_mean_ON=Target_File_Present(Running_mean_ObsInd(1))
+     elseif(Running_mean_Force_Opt.eq.1) then
+       ! Verify that the CURR and NEXT analyses are available
+       !-----------------------------------------------------
+       Running_mean_ON=(Target_File_Present(Running_mean_ObsInd(1)).and. &
+                 Target_File_Present(Running_mean_ObsInd(2))      )
+     else
+       ! Verify that the ALL analyses are available
+       !---------------------------------------------
+       Running_mean_ON=.true.
+       do nn=1,Running_mean_NumObs
+         if(.not.Target_File_Present(nn)) Running_mean_ON=.false.
+       end do
+     endif
+     if(.not.Running_mean_ON) then
+       if(masterproc) then
+         write(iulog,*) 'NUDGING: WARNING - analyses file NOT FOUND. Switching '
+         write(iulog,*) 'NUDGING:           nudging OFF to coast thru the gap. '
+       endif
+     endif
+   else
+     Running_mean_ON=.false.
+   endif
    !----------------------------------------------------------------
    ! Toggle running_mean flag when the time interval is between 
    ! beginning and ending times, and all of the analyses files exist.
    !----------------------------------------------------------------
-   if((After_Beg).and.(Before_End)) then
-       Running_mean_ON=Target_File_Present
+  !  if((After_Beg).and.(Before_End)) then
+  !      Running_mean_ON=Target_File_Present
+  !  else
+  !    Running_mean_ON=.false.
+  !  endif
+
+   if((After_nudge_Beg).and.(Before_End)) then
+       Running_mean_nudge_ON=Running_mean_File_Present
    else
-     Running_mean_ON=.false.
+     Running_mean_nudge_ON=.false.
    endif
 
    !---------------------------------------------------
@@ -1223,8 +1347,40 @@ contains
 
      ! Now Load the Target values for running_mean tendencies
      !---------------------------------------------------
-     ! Target is OBS data at NEXT time
-     !----------------------------------
+     if(Running_mean_Force_Opt.eq.0) then
+       ! Target is OBS data at NEXT time
+       !----------------------------------
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_V(:ncol,:pver,lchnk)=Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_T(:ncol,:pver,lchnk)=Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_Q(:ncol,:pver,lchnk)=Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+       end do
+     elseif(Running_mean_Force_Opt.eq.1) then
+       ! Target is linear interpolation of OBS data CURR<-->NEXT time    
+       !---------------------------------------------------------------
+       call ESMF_TimeSet(Date1,YY=Year,MM=Month,DD=Day,S=Sec)
+       call ESMF_TimeSet(Date2,YY=Target_Next_Year,MM=Target_Next_Month, &
+                               DD=Target_Next_Day , S=Target_Next_Sec    )
+       DateDiff =Date2-Date1
+       call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
+       Tfrac= float(DeltaT)/float(Running_mean_Step)
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+       end do
+     else
+       write(iulog,*) 'Running_mean: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
+       call endrun('running_mean_timestep_init:: ERROR unknown Running_mean_Force_Opt')
+     endif
      ! Now load Dry Static Energy values for Target
        ! DSE tendencies from Temperature only
        !---------------------------------------
@@ -1327,7 +1483,11 @@ contains
    lq(indw)=.true.
    call physics_ptend_init(phys_tend,phys_state%psetcols,'running_mean',lu=.true.,lv=.true.,ls=.true.,lq=lq)
 
-   if(Running_mean_ON) then
+   if((Running_mean_ON).and.(Running_mean_nudge_ON)) then
+
+    !  if (masterproc) then
+    !     write(iulog,*) 'Running mean nudge on, applying tendency'
+    !  end if
      lchnk=phys_state%lchnk
      ncol =phys_state%ncol
      phys_tend%u(:ncol,:pver)     =Running_mean_Ustep(:ncol,:pver,lchnk)
@@ -1652,19 +1812,27 @@ contains
    real(r8) Lat_anal(Running_mean_nlat)
    real(r8) Lon_anal(Running_mean_nlon)
    real(r8) Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
-   integer  nn
+   integer  nn,Nindex
 
+   ! Rotate Running_mean_ObsInd() indices, then check the existence of the analyses 
+   ! file; broadcast the updated indices and file status to all the other MPI nodes. 
    ! If the file is not there, then just return.
    !------------------------------------------------------------------------
    if(masterproc) then
-     inquire(FILE=trim(anal_file),EXIST=Target_File_Present)
-     write(iulog,*)'running_mean: Target_File_Present=',Target_File_Present
+     Nindex=Running_mean_ObsInd(Running_mean_NumObs)
+     do nn=Running_mean_NumObs,2,-1
+       Running_mean_ObsInd(nn)=Running_mean_ObsInd(nn-1)
+     end do
+     Running_mean_ObsInd(1)=Nindex
+     inquire(FILE=trim(anal_file),EXIST=Target_File_Present(Running_mean_ObsInd(1)))
+     write(iulog,*)'Running_mean: Running_mean_ObsInd=',Running_mean_ObsInd
+     write(iulog,*)'Running_mean: Target_File_Present=',Target_File_Present
    endif
 #ifdef SPMD
-   call mpibcast(Target_File_Present, 1, mpilog, 0, mpicom)
-
+   call mpibcast(Target_File_Present, Running_mean_NumObs, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_ObsInd, Running_mean_NumObs, mpiint, 0, mpicom)
 #endif
-   if(.not.Target_File_Present) return
+   if(.not.Target_File_Present(Running_mean_ObsInd(1))) return
 
    ! masterporc does all of the work here
    !-----------------------------------------
@@ -1765,7 +1933,7 @@ contains
      end do
    endif ! (masterproc) then
    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Target_U(1,1,begchunk))
+                               Nobs_U(1,1,begchunk,Running_mean_ObsInd(1)))
 
    if(masterproc) then
      istat=nf90_inq_varid(ncid,'V',varid)
@@ -1787,7 +1955,7 @@ contains
      end do
    endif ! (masterproc) then
    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Target_V(1,1,begchunk))
+                               Nobs_V(1,1,begchunk,Running_mean_ObsInd(1)))
 
    if(masterproc) then
      istat=nf90_inq_varid(ncid,'T',varid)
@@ -1809,7 +1977,7 @@ contains
      end do
    endif ! (masterproc) then
    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Target_T(1,1,begchunk))
+                               Nobs_T(1,1,begchunk,Running_mean_ObsInd(1)))
 
    if(masterproc) then
      istat=nf90_inq_varid(ncid,'Q',varid)
@@ -1839,7 +2007,7 @@ contains
      endif
    endif ! (masterproc) then
    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Target_Q(1,1,begchunk))
+                               Nobs_Q(1,1,begchunk,Running_mean_ObsInd(1)))
 
    ! End Routine
    !------------
@@ -2033,8 +2201,8 @@ contains
       do iw = 1, Running_mean_win_size
         itime = t_indices(iw)
         nstep_old = nstep_array(itime)
-        if (nstep_old >= 96000) then
-        nstep_new = 96000
+        if (nstep_old >= Running_mean_nstep_max) then
+        nstep_new = Running_mean_nstep_max
         else
           nstep_new = max(0, nstep_old) + 1 ! maybe this is one too many but tbd
         endif

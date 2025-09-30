@@ -473,6 +473,24 @@
        Default: none
        </entry>
 
+<entry id="Running_mean_nudge_Beg_Year" type="integer" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Year at which nudging from running_mean Begins.
+       Default: none
+       </entry>
+
+<entry id="Running_mean_nudge_Beg_Month" type="integer" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Month at which nudging from running_mean Begins.
+       Default: none
+       </entry>
+
+<entry id="Running_mean_nudge_Beg_Day" type="integer" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Day at which nudging from running_mean Begins.
+       Default: none
+       </entry>
+
 <entry id="Running_mean_Force_Opt" type="integer" category="running_mean"
        group="running_mean_nl" valid_values="" >
        Select the form of running_mean forcing, where (t'==Analysis times ; t==Model Times)
@@ -640,14 +658,14 @@
        Assumes running mean files are separated by hour, so will only use
        +/- 1/2 of the window size in days for the corresponding sec. Must
        be odd and positive.  
-       Default: 11 
+       Default: 15 
        </entry>
 
-<entry id="Running_mean_weight_type" type="char*10" category="running_mean"
+<entry id="Running_mean_nstep_max" type="integer" category="running_mean"
        group="running_mean_nl" valid_values="" >
-       Type of weighting applied to the window when updating the running mean. 
-       Allowed values include "uniform", "gaussian", and "triangular".
-       Default: "uniform"
+       Number of days after which the incremental running mean stops incrementing. After this
+       day the running mean converts to a simple moving average with window size of nstep_max. 
+       Default: 500
        </entry>
 
 <!-- Corrector Parameters -->
