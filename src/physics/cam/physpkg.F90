@@ -1110,7 +1110,7 @@ contains
     use spmd_utils,      only: mpicom
     use iop_forcing,     only: scam_use_iop_srf
     use time_manager,       only: get_nstep
-    use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend
+    use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend,corrector_timestep_init
     use check_energy,       only: check_energy_chng 
 #if ( defined OFFLINE_DYN )
     use metdata,         only: get_met_srf2
@@ -1175,19 +1175,46 @@ contains
 
     ! Update Corrector values, if needed
     !----------------------------------
+    nstep = get_nstep()
+    if(masterproc) then 
+      write(iulog,*) 'replay:  nstep ', nstep 
+    endif
     if((Force_Model).and.(Force_ON)) then
       nstep = get_nstep()
+      if(masterproc) then 
+      write(iulog,*) "before force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      if (nstep > 0) then 
       do c=begchunk,endchunk
          call corrector_timestep_tend(phys_state(c),ptend)
          call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
          call check_energy_chng(phys_state(c), phys_tend(c), "corrector", nstep, ztodt, zero, zero, zero, zero)
       end do
-    endif
+      else
+         if(masterproc) then 
+         write(iulog,*) "timestep 0 no update "
+         endif 
+      endif
+      if(masterproc) then 
+         write(iulog,*) "after force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      endif
+
+      ! update analysis and timestep for one step after timestep_tend
+      if (Force_Model) call corrector_timestep_init(phys_state)
 
     if (Replay_Model) then
-      if (masterproc) write(iulog,*) 'About to call replay_correction.'
+      if(masterproc) then 
+        write(iulog,*) 'About to call replay_correction.'
+        write(iulog,*) "phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
       call replay_correction(phys_state,phys_tend,ztodt) ! call replay function - sweidman
     endif
+
+    if (masterproc) then
+        write(iulog,*) 'after replay_correction state(1)%uforce(1,20) = ', phys_state(begchunk)%uforce(1,20)
+        write(iulog,*) 'after replay_correction state(1)%u(1,20) = ', phys_state(begchunk)%u(1,20)
+    end if
 
     do c=begchunk,endchunk
        ncol = get_ncols_p(c)
@@ -2452,7 +2479,7 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   !----------------------------------
   if(Nudge_Model) call nudging_timestep_init(phys_state)
 
-  if(Force_Model) call corrector_timestep_init(phys_state)
+  !if(Force_Model) call corrector_timestep_init(phys_state)
 
 end subroutine phys_timestep_init
 
