@@ -309,10 +309,10 @@ contains
 
     !forcings added to default list
     !sweidman
-    call add_default ('SDIFF   '  , 1, ' ')
-    call add_default ('UDIFF   '  , 1, ' ')
-    call add_default ('VDIFF   '  , 1, ' ')
-    call add_default ('QDIFF   '  , 1, ' ')
+    !call add_default ('SDIFF   '  , 1, ' ')
+    !call add_default ('UDIFF   '  , 1, ' ')
+    !call add_default ('VDIFF   '  , 1, ' ')
+    !call add_default ('QDIFF   '  , 1, ' ')
 
     if (history_vdiag) then
       call add_default ('U200', 2, ' ')

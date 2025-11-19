@@ -1163,9 +1163,17 @@ contains
 
 !$OMP PARALLEL DO PRIVATE (C, NCOL, phys_buffer_chunk)
     if (Replay_Model) then
-      if (masterproc) write(iulog,*) 'About to call replay_correction.'
+      if(masterproc) then 
+        write(iulog,*) 'About to call replay_correction.'
+        write(iulog,*) "phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
       call replay_correction(phys_state,phys_tend,ztodt) ! call replay function - sweidman
     endif
+
+    if (masterproc) then
+        write(iulog,*) 'after replay_correction state(1)%uforce(1,20) = ', phys_state(begchunk)%uforce(1,20)
+        write(iulog,*) 'after replay_correction state(1)%u(1,20) = ', phys_state(begchunk)%u(1,20)
+    end if
 
     do c=begchunk,endchunk
        ncol = get_ncols_p(c)
