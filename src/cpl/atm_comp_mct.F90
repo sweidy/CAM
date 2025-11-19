@@ -463,22 +463,6 @@ CONTAINS
 
        ! add swap here - sweidman
 
-       !if(masterproc) then
-         !print*, 'checking whether cam_in vars exist'
-         !if ( associated(cam_in(c)%meganflx) ) print*, 'meganflx'
-         !print*, 'not megan' 
-         !if ( associated(cam_in(c)%fireflx) .and. associated(cam_in(c)%fireztop) ) print*, 'fireflux'
-         !print*, 'not fire'  
-         !if ( index_x2a_Sl_ddvel/=0 .and. n_drydep>0 ) print*, 'dry dep vel'
-         !if (index_x2a_Fall_fco2_lnd /= 0) print*, 'fall'
-         !if (index_x2a_Faoo_fco2_ocn /= 0) print*, 'faoo fco2'
-         !if (index_x2a_Faoo_fdms_ocn /= 0) print*, 'faoo fdms'
-         !if (index_a2x_Sa_co2prog /= 0) print*, 'atm prog co2'
-         !if (index_a2x_Sa_co2diag /= 0) print*, 'atm diag co2'
-         !if (index_a2x_Faxa_nhx > 0 ) print*, 'nhx nit'
-         !if (index_a2x_Faxa_noy > 0 ) print*, 'noy nit'
-      !endif 
-
        if (mod(tod,21600)==0 .and. .not. do_restart) then
          if(masterproc) then
             print *, 'swap cam old to new', tod
@@ -677,12 +661,12 @@ CONTAINS
                   cam_in(c)%cflx(i,q)      = cam_in(c)%old_cflx(i,q)
              end do
          end do
-       end do
+         end do
 
-       ! zero out tendencies
-       call physics_ptend_reset(ptend)
+         ! zero out tendencies
+         call physics_ptend_reset(ptend)
 
-       do_restart=.FALSE.
+         do_restart=.FALSE.
        end if
        ! end add
 
@@ -749,12 +733,6 @@ CONTAINS
       call memmon_reset_addr()
     endif
 #endif
-
-if(masterproc) then
-   print *, 'after atm_run: ', tod
-   print *, 'after atm_run: ', cam_out(begchunk)%tbot(2)
-   print *, cam_in(begchunk)%shf(2)
- end if
 
   end subroutine atm_run_mct
 

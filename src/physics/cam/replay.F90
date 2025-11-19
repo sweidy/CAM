@@ -1194,7 +1194,8 @@ end function interpret_filename_replay
         call get_horiz_grid_dim_d(hdim1, hdim2)
     
     
-    modstep=int((mod(istep+6, 48)) / 6)
+    !modstep=int((mod(istep+6, 48)) / 6)
+    modstep=int(ncsec/10800)
     modstep6hr=  (mod(istep, 12)) 
     modstep3hr=  (mod(istep, 6)) 
     
@@ -1202,34 +1203,6 @@ end function interpret_filename_replay
     
       !------------------------------------------
        
-       
-    !goals at end of "corrector" run
-    !a) reset forcing to zero
-    !b) set flag to false 
-       
-       if (modstep6hr == 11 ) then
-    !       if (corrector_step) then
-               #if ( defined SPMD )
-               do c = begchunk, endchunk
-                   call get_rlat_all_p(c,pcols,rlat)
-                   call get_lat_all_p(c,pcols,ilat_all)
-                   rlat=rlat*180._r8/3.14159
-                   ncols = get_ncols_p(c)
-                   do i = 1, ncols
-                       do k=1,pver
-                            state(c)%qforce(i,k) = 0.0
-                            state(c)%uforce(i,k) = 0.0
-                            state(c)%vforce(i,k) = 0.0
-                            state(c)%sforce(i,k) = 0.0 
-                       end do
-                   end do
-               end do
-               #endif
-    !       a) wipe the forcing to zero
-               corrector_step=.FALSE.
-    
-        endif
-      !      set corrector_step is false
 
     
     if (masterproc) then
@@ -1244,17 +1217,13 @@ end function interpret_filename_replay
     !if in "corrector" step: divide difference by 6h to get tendency and apply it to physics
     !
     if (corrector_step) then
-       if(masterproc) then
-          print *, 'applying corrector ptend'
-          !write(iulog,*) 'replay: Reading analyses:',trim(filename)
-       endif
     #if ( defined SPMD )
     do c = begchunk, endchunk
            ! reallocate ptend
            call cnst_get_ind('Q',indw)
            lq(:)   =.false.
            lq(indw)=.true.
-           call physics_ptend_init(ptend, state(c)%psetcols, "none", ls=.true.,  lu=.true., lv=.true., lq=lq) 
+           call physics_ptend_init(ptend, state(c)%psetcols, "replay", ls=.true.,  lu=.true., lv=.true., lq=lq) 
  
            ncols = get_ncols_p(c)
     !  print *, "=========doloop ====>  ncols= ", ncols
@@ -1274,9 +1243,45 @@ end function interpret_filename_replay
 
         call physics_update (state(c), ptend, ztodt, tend(c)) ! this calls ptend deallocate
         call check_energy_chng(state(c), tend(c), "replay", istep, ztodt, zero, zero, zero, zero)
-    end do
+    end do ! chunk
+
+    if(masterproc) then 
+       write(iulog,*) "state(1)%uforce(1,20): ", state(begchunk)%uforce(1,20)
+       ! write(iulog,*) "(state + noise) ", (state(begchunk)%uforce(1,20)+ noise)
+       write(iulog,*) "(state + noise)/forcingtime: ", (state(begchunk)%uforce(1,20)+ noise)/forcingtime*Replay_coef*Replay_Utau(1,20,begchunk)
+       write(iulog,*) "noise: ", noise 
+    endif
+
     #endif
     endif
+
+    !goals at end of "corrector" run
+    !a) reset forcing to zero
+    !b) set flag to false
+            
+       if (modstep6hr == 0 ) then ! 11-11-25 changed 11 to 0
+    !       if (corrector_step) then
+               #if ( defined SPMD )
+               do c = begchunk, endchunk
+                   call get_rlat_all_p(c,pcols,rlat)
+                   call get_lat_all_p(c,pcols,ilat_all)
+                   rlat=rlat*180._r8/3.14159
+                   ncols = get_ncols_p(c)
+                   do i = 1, ncols
+                       do k=1,pver
+                            state(c)%qforce(i,k) = 0.0 ! but then will writeout = 0 -- I think that's okay? 
+                            state(c)%uforce(i,k) = 0.0
+                            state(c)%vforce(i,k) = 0.0
+                            state(c)%sforce(i,k) = 0.0 
+                       end do
+                   end do
+               end do
+               #endif
+    !       a) wipe the forcing to zero
+               corrector_step=.FALSE.
+    
+        endif
+      !      set corrector_step is false
     
     
     !goals at end of "clean" run
@@ -1286,20 +1291,27 @@ end function interpret_filename_replay
     ! d) set corrector_step to true 
     ! e) reset clock and restart states (not here)
     
-        if  (modstep6hr==5 .AND. .NOT. corrector_step ) then
+        if  (modstep6hr==6 .AND. .NOT. corrector_step ) then ! 11-11-25 changed 5 to 6
 
           fileexists=.FALSE.
     
     do while (.NOT. fileexists )
 
-      if (masterproc) write(iulog,*) "modstep, ncsec + 1800", modstep, ncsec+1800
+      ! if (masterproc) write(iulog,*) "modstep, ncsec + 1800", modstep, ncsec+1800
     
+      ! filename=interpret_filename_replay(Replay_File_Template      , &
+      !     yr_spec=yr , &
+      !     mon_spec=mon, &
+      !     day_spec=day  , &
+      !     hr_spec=modstep, &
+      !     sec_spec=ncsec+1800    )
+      if (masterproc) write(iulog,*) "modstep, ncsec ", modstep, ncsec
       filename=interpret_filename_replay(Replay_File_Template      , &
           yr_spec=yr , &
           mon_spec=mon, &
           day_spec=day  , &
           hr_spec=modstep, &
-          sec_spec=ncsec+1800    )
+          sec_spec=ncsec    )
 
       if(masterproc) then
         write(iulog,*) trim(Replay_Path)//trim(filename)
@@ -1367,7 +1379,7 @@ end function interpret_filename_replay
             end do
  
             if(masterproc) then
-            write(iulog,*) "done update state"
+            write(iulog,*) "done update forcing"
             write(iulog,*) "state(c)%sforce(1,1): ", state(begchunk)%sforce(1,1)
             write(iulog,*) "state(c)%sforce(2,2): ", state(begchunk)%sforce(2,2)
             endif
