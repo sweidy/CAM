@@ -1218,7 +1218,7 @@ contains
                                         yr_spec=Running_mean_Curr_Year, &
                                         mon_spec=Running_mean_Curr_Month, &
                                         day_spec=Running_mean_Curr_Day  , &
-                                        sec_spec=Running_mean_Curr_Sec    )
+                                        sec_spec=Running_mean_Curr_Sec    ) ! Running_mean_Curr_Sec 
       INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
     
       if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
@@ -1425,11 +1425,11 @@ contains
 
      if (masterproc) then
         write(iulog,*) 'day, sec', Target_Curr_Day, Target_Curr_Sec
-        write(iulog,*) 'Running_mean_Utau(1,20,1) = ', Running_mean_Utau(1,20,begchunk)
-        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
-        write(iulog,*) 'Model_U(1,20,1) = ', Model_U(1,20,begchunk)
-        write(iulog,*) 'Running_nudge_U(1,20,1) = ', Running_nudge_U(1,20,begchunk) 
-        write(iulog,*) 'Running_mean_Ustep(1,20,1) = ', Running_mean_Ustep(1,20,begchunk)
+        write(iulog,*) 'Running_mean_Stau(1,20,1) = ', Running_mean_Stau(1,20,begchunk)
+        write(iulog,*) 'Target_S(1,20,1) = ', Target_S(1,20,begchunk)
+        write(iulog,*) 'Model_S(1,20,1) = ', Model_S(1,20,begchunk)
+        write(iulog,*) 'Running_nudge_S(1,20,1) = ', Running_nudge_S(1,20,begchunk) 
+        write(iulog,*) 'Running_mean_Sstep(1,20,1) = ', Running_mean_Sstep(1,20,begchunk)
      end if
 
      !******************
