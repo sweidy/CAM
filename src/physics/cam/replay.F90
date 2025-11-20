@@ -1247,9 +1247,7 @@ end function interpret_filename_replay
 
     if(masterproc) then 
        write(iulog,*) "state(1)%uforce(1,20): ", state(begchunk)%uforce(1,20)
-       ! write(iulog,*) "(state + noise) ", (state(begchunk)%uforce(1,20)+ noise)
-       write(iulog,*) "(state + noise)/forcingtime: ", (state(begchunk)%uforce(1,20)+ noise)/forcingtime*Replay_coef*Replay_Utau(1,20,begchunk)
-       write(iulog,*) "noise: ", noise 
+       write(iulog,*) "(state)/forcingtime: ", (state(begchunk)%uforce(1,20))/forcingtime*Replay_coef*Replay_Utau(1,20,begchunk)
     endif
 
     #endif
