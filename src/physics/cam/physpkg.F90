@@ -1105,14 +1105,14 @@ contains
     !-----------------------------------------------------------------------
     use physics_buffer,  only: physics_buffer_desc, pbuf_get_chunk, pbuf_deallocate, pbuf_update_tim_idx
     use mo_lightning,    only: lightning_no_prod
-    use cam_diagnostics, only: diag_deallocate, diag_surf
+    use cam_diagnostics, only: diag_deallocate, diag_surf,diag_phys_writeout
     use physconst,       only: stebol, latvap
     use carma_intr,      only: carma_accumulate_stats
     use spmd_utils,      only: mpicom
     use iop_forcing,     only: scam_use_iop_srf
     use time_manager,       only: get_nstep
-    use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend
-    use stochaiing_corrector,         only: Stochai_Model,Stochai_ON,stochaiing_timestep_tend !++WEC
+    use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend,corrector_timestep_init
+    use stochaiing_corrector,         only: Stochai_Model,Stochai_ON,stochaiing_timestep_tend,stochaiing_timestep_init !++WEC
     use check_energy,       only: check_energy_chng 
 #if ( defined OFFLINE_DYN )
     use metdata,         only: get_met_srf2
@@ -1177,14 +1177,35 @@ contains
 
     ! Update Corrector values, if needed
     !----------------------------------
+    nstep = get_nstep()
+    if(masterproc) then 
+      write(iulog,*) 'previous replay location: nstep ', nstep 
+    endif
     if((Force_Model).and.(Force_ON)) then
       nstep = get_nstep()
+      if(masterproc) then 
+      write(iulog,*) "before force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      if (nstep > 0) then 
       do c=begchunk,endchunk
          call corrector_timestep_tend(phys_state(c),ptend)
          call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
          call check_energy_chng(phys_state(c), phys_tend(c), "corrector", nstep, ztodt, zero, zero, zero, zero)
       end do
-    endif
+      else
+         if(masterproc) then 
+         write(iulog,*) "timestep 0 no update "
+         endif 
+      endif
+      if(masterproc) then 
+         write(iulog,*) "after force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      endif
+      ! update analysis and timestep for one step after timestep_tend
+      if(masterproc) then 
+         write(iulog,*) "corrector timestep init "
+      endif
+      if (Force_Model) call corrector_timestep_init(phys_state)
 
     !++WEC
     ! Update Stochain values, if needed
@@ -1197,7 +1218,9 @@ contains
          call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
          call check_energy_chng(phys_state(c), phys_tend(c), "stochaiing_corrector", nstep, ztodt, zero, zero, zero, zero)
       end do
+      endif
     endif
+    if(Stochai_Model) call stochaiing_timestep_init(phys_state)!++WEC
     !--WEC
 
     do c=begchunk,endchunk
@@ -2456,8 +2479,8 @@ subroutine phys_timestep_init(phys_state, cam_in, cam_out, pbuf2d)
   !----------------------------------
   if(Nudge_Model) call nudging_timestep_init(phys_state)
 
-  if(Force_Model) call corrector_timestep_init(phys_state)
-  if(Stochai_Model) call stochaiing_timestep_init(phys_state)!++WEC
+  !if(Force_Model) call corrector_timestep_init(phys_state)
+  !if(Stochai_Model) call stochaiing_timestep_init(phys_state)!++WEC
 
 end subroutine phys_timestep_init
 
