@@ -142,6 +142,7 @@ module running_mean
 !                              0 -> NEXT-OBS: Target=Anal(t'_next)                 [DEFAULT]
 !                              1 -> LINEAR:   Target=(F*Anal(t'_curr) +(1-F)*Anal(t'_next))
 !                                                 F =(t'_next - t_curr )/Tdlt_Anal
+!                              2 -> AVERAGE: Target=1/2*(Anal(t'_next) + Anal(t_curr))
 !
 !      Running_mean_TimeScale_Opt - INT Index to select the timescale for nudging.
 !                                where (t'==Analysis times ; t==Model Times) 
@@ -380,10 +381,10 @@ contains
    ! Set Default Namelist values
    !-----------------------------
    Running_mean_Model         = .false.
-   Target_Path          = '/n/holylfs04/LABS/kuang_lab/Lab/sweidman/MERRA2_OG/MERRA2_f19/'
+   Target_Path          = '/n/holylfs06/LABS/kuang_lab/Lab/sweidman/MERRA2_OG/MERRA2_f19/'
    Target_File_Template = 'MERRA2_%m%d_%h.nc'
    Running_mean_Force_Opt     = 0
-   Running_mean_Path          = '/n/home04/sweidman/holylfs04/IC_CESM2/'
+   Running_mean_Path          = '/n/home04/sweidman/holylfs06/IC_CESM2/'
    Running_mean_File_Template = 'cam_running_mean.%m-%d-%s.nc'
    Running_mean_TimeScale_Opt = 0
    Running_mean_TSmode        = 0
@@ -816,7 +817,7 @@ contains
      ! Initialize number of nudging observation values to keep track of.
      ! Allocate and initialize observation indices 
      !-----------------------------------------------------------------
-     if((Running_mean_Force_Opt.ge.0).and.(Running_mean_Force_Opt.le.1)) then
+     if((Running_mean_Force_Opt.ge.0).and.(Running_mean_Force_Opt.le.2)) then
        Running_mean_NumObs=2 ! TODO: is this correct? 
      else
        ! Additional Options may need OBS values at more times.
@@ -1307,6 +1308,11 @@ contains
        !-----------------------------------------------------
        Running_mean_ON=(Target_File_Present(Running_mean_ObsInd(1)).and. &
                  Target_File_Present(Running_mean_ObsInd(2))      )
+     elseif(Running_mean_Force_Opt.eq.2) then
+       ! Verify that the CURR and NEXT analyses are available
+       !-----------------------------------------------------
+       Running_mean_ON=(Target_File_Present(Running_mean_ObsInd(1)).and. &
+                 Target_File_Present(Running_mean_ObsInd(2))      )
      else
        ! Verify that the ALL analyses are available
        !---------------------------------------------
@@ -1366,6 +1372,7 @@ contains
        DateDiff =Date2-Date1
        call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
        Tfrac= float(DeltaT)/float(Running_mean_Step)
+
        do lchnk=begchunk,endchunk
          ncol=phys_state(lchnk)%ncol
          Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
@@ -1377,6 +1384,28 @@ contains
          Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
                                            +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
        end do
+     elseif(Running_mean_Force_Opt.eq.2) then
+       ! Target is midpoint of OBS data CURR<-->NEXT time    
+       !---------------------------------------------------------------
+       Tfrac= 0.5_r8
+
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+       end do
+       if (masterproc) then
+        write(iulog,*) 'day, sec, Tfrac', Target_Curr_Day, Target_Curr_Sec, Tfrac ! TODO: just do centered difference, not changing based on time
+        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
+        write(iulog,*) 'Nobs_U(1,20,1,1) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(1))
+        write(iulog,*) 'Nobs_U(1,20,1,2) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(2))
+       end if
      else
        write(iulog,*) 'Running_mean: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
        call endrun('running_mean_timestep_init:: ERROR unknown Running_mean_Force_Opt')

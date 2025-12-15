@@ -85,7 +85,7 @@ contains
    ! Set Default Namelist values
    !-----------------------------
    ConvStateSwap_Model         = .false.
-   ConvStateSwap_Path          = '/n/holylfs04/LABS/kuang_lab/Lab/sweidman/IC_CESM2/'
+   ConvStateSwap_Path          = '/n/holylfs06/LABS/kuang_lab/Lab/sweidman/IC_CESM2/'
    ConvStateSwap_File_Template = 'spcam_replay_uvtq.%m-%d-%s.nc'
    ConvStateSwap_tau           = 1800._r8 ! 30 minute forcing timescale
    ConvStateSwap_Step          = 21600._r8 ! read every 6 hrs

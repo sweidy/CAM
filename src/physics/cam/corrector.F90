@@ -298,7 +298,7 @@ contains
    ! Set Default Namelist values
    !-----------------------------
    Force_Model         = .false.
-   Force_Path          = '/n/home04/sweidman/holylfs04/IC_CESM2/'
+   Force_Path          = '/n/home04/sweidman/holylfs06/IC_CESM2/'
    Force_File_Template = 'spcam_replay.%m-%d-%s.nc'
    Force_Times_Per_Day = 4
    Force_Ucoef         = 1._r8
