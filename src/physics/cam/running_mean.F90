@@ -344,6 +344,10 @@ module running_mean
   real(r8), allocatable :: Climo_Q(:,:,:,:,:)
   integer , allocatable :: Running_mean_nstep(:,:) ! (nday, nhour)
 
+  real(r8), allocatable :: Lat_array(:) ! nlat
+  real(r8), allocatable :: Lon_array(:) ! nlon
+  real(r8), allocatable :: Lev_array(:) ! nlev
+
 
 contains
   !================================================================
@@ -1112,6 +1116,8 @@ contains
       end if
    end if
 
+   ! Gather grid information for saving climo file
+
 
    ! End Routine
    !------------
@@ -1446,7 +1452,7 @@ contains
                                            +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
        end do
        if (masterproc) then
-        write(iulog,*) 'day, sec, Tfrac', Target_Curr_Day, Target_Curr_Sec, Tfrac ! TODO: just do centered difference, not changing based on time
+        write(iulog,*) 'day, sec, Tfrac', Target_Curr_Day, Target_Curr_Sec, Tfrac ! 
         write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
         write(iulog,*) 'Nobs_U(1,20,1,1) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(1))
         write(iulog,*) 'Nobs_U(1,20,1,2) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(2))
@@ -1498,12 +1504,12 @@ contains
      end do
 
      if (masterproc) then
-        write(iulog,*) 'day, sec', Target_Curr_Day, Target_Curr_Sec
-        write(iulog,*) 'Running_mean_Stau(1,20,1) = ', Running_mean_Stau(1,20,begchunk)
+        write(iulog,*) 'after ustep is calculated'
         write(iulog,*) 'Target_S(1,20,1) = ', Target_S(1,20,begchunk)
         write(iulog,*) 'Model_S(1,20,1) = ', Model_S(1,20,begchunk)
-        write(iulog,*) 'Running_nudge_S(1,20,1) = ', Running_nudge_S(1,20,begchunk) 
-        write(iulog,*) 'Running_mean_Sstep(1,20,1) = ', Running_mean_Sstep(1,20,begchunk)
+        write(iulog,*) 'Running_nudge_S(1,20,1) = ', Running_nudge_S(1,20,begchunk)
+        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk) 
+        write(iulog,*) 'Running_nudge_U(1,20,1) = ', Running_nudge_U(1,20,begchunk)  
      end if
 
      !******************
@@ -1659,7 +1665,12 @@ contains
      Running_mean_nstep(iday2, ihour) = nstep_new
      wrk = 1._r8 / real(nstep_new, r8)
 
-     ! TODO: make sure this works and figure out why some gridpoints explode (wrk undefined?)
+    !  if (masterproc) then
+    !     write(iulog,*) 'iday2, ihour, wrk', iday2,ihour,wrk
+    !     write(iulog,*) 'Climo_U, Model_U', Climo_U(1,20,begchunk,iday2,ihour),Model_U(1,20,begchunk)
+    !     write(iulog,*) 'Climo_Q, Model_Q', Climo_Q(1,20,begchunk,iday2,ihour),Model_Q(1,20,begchunk)
+    !  end if
+
      do lchnk = begchunk, endchunk
         ncol = get_ncols_p(lchnk)
         do k = 1, pver
@@ -1671,11 +1682,12 @@ contains
         end do
         end do
      end do
-    end do
 
-    ! if (masterproc) then
-    !     write(iulog,*) 'Running_mean_nstep', Running_mean_nstep
-    ! end if
+    !  if (masterproc) then
+    !     write(iulog,*) 'after mean Climo_U', Climo_U(1,20,begchunk,iday2,ihour)
+    !     write(iulog,*) 'after mean Climo_Q', Climo_Q(1,20,begchunk,iday2,ihour)
+    !   end if
+    end do
 
    ! End Routine
    !------------
@@ -1918,7 +1930,7 @@ contains
    !   chunks onto the FV lon/lat grid and write them to a NetCDF file,
    !   together with Running_mean_nstep(day,hour).
    !-------------------------------------------------------------------
-   use ppgrid        , only: pver, begchunk, endchunk
+   use ppgrid        ,only: pver,pcols,begchunk,endchunk
    use spmd_utils    , only: masterproc
    use cam_abortutils, only: endrun
    use cam_logfile   , only: iulog
@@ -1940,6 +1952,7 @@ contains
    integer :: iday, ihr
    real(r8) :: Xclimo(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)
    real(r8) :: Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
+   real(r8) :: Xslab(pcols,pver,begchunk:endchunk)
 
    nlon  = Running_mean_nlon
    nlat  = Running_mean_nlat
@@ -1947,6 +1960,7 @@ contains
    nday  = Running_mean_nday
    nhour = Running_mean_Times_Per_Day
 
+   Xslab(:,:,:) = 0._r8
 
    ! Create NetCDF file
    !--------------------
@@ -1965,7 +1979,6 @@ contains
    ! Define dimensions: lon, lat, lev, day, hour
    !---------------------------------------------
    ! TODO: use actual longitude, rather than index
-   ! TODO: check scattering is going into correct location based on chunking
    istat = nf90_def_dim(ncid, 'lon',  nlon,  dim_lon)
    if (istat /= NF90_NOERR) then
       write(iulog,*) nf90_strerror(istat)
@@ -2062,9 +2075,10 @@ contains
    do iday = 1, nday
      do ihr = 1, nhour
 
+       Xslab(:,:,:) = Climo_U(:,:,:,iday,ihr)
        ! ---- U ----
        call gather_chunk_to_field(1, nlev, 1, nlon, &
-            Climo_U(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+            Xslab, Xtrans)
 
        if (masterproc) then
        do ilat = 1, nlat
@@ -2084,8 +2098,9 @@ contains
        endif !masterproc
 
        ! ---- V ----
+       Xslab(:,:,:) = Climo_V(:,:,:,iday,ihr)
        call gather_chunk_to_field(1, nlev, 1, nlon, &
-            Climo_V(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+            Xslab, Xtrans)
 
        if (masterproc) then
        do ilat = 1, nlat
@@ -2105,8 +2120,9 @@ contains
        endif ! masterproc
 
        ! ---- T ----
+       Xslab(:,:,:) = Climo_T(:,:,:,iday,ihr)
        call gather_chunk_to_field(1, nlev, 1, nlon, &
-            Climo_T(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+            Xslab, Xtrans)
 
        if (masterproc) then
        do ilat = 1, nlat
@@ -2126,8 +2142,9 @@ contains
        endif ! masterproc
 
        ! ---- Q ----
+       Xslab(:,:,:) = Climo_Q(:,:,:,iday,ihr)
        call gather_chunk_to_field(1, nlev, 1, nlon, &
-            Climo_Q(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+            Xslab, Xtrans)
 
        if (masterproc) then
        do ilat = 1, nlat
@@ -2170,7 +2187,7 @@ contains
    !   NetCDF file on FV (lon,lat,lev,day,hour) grid and scatter to
    !   CAM chunk space.
    !-------------------------------------------------------------------
-   use ppgrid        , only: pver, begchunk, endchunk
+   use ppgrid        ,only: pver,pcols,begchunk,endchunk
    use spmd_utils    , only: masterproc
    use cam_abortutils, only: endrun
    use cam_logfile   , only: iulog
@@ -2194,6 +2211,7 @@ contains
    integer :: var_nstep
    real(r8) :: Xclimo(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)
    real(r8) :: Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
+   real(r8) :: Xslab(pcols,pver,begchunk:endchunk)
 
    ! Check existence on master
    !---------------------------
@@ -2372,7 +2390,8 @@ contains
        endif  ! masterproc
 
        call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
-                                   Xtrans, Climo_U(1,1,begchunk,iday,ihr))
+                                   Xtrans, Xslab)
+       Climo_U(:,:,:,iday,ihr) = Xslab(:,:,:)
 
        ! ---- V ----
        if (masterproc) then
@@ -2393,7 +2412,9 @@ contains
        endif  ! masterproc
 
        call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
-                                   Xtrans, Climo_V(1,1,begchunk,iday,ihr))
+                                   Xtrans, Xslab)
+
+       Climo_V(:,:,:,iday,ihr) = Xslab(:,:,:)
 
        ! ---- T ----
        if (masterproc) then
@@ -2414,7 +2435,8 @@ contains
        endif  ! masterproc
 
        call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
-                                   Xtrans, Climo_T(1,1,begchunk,iday,ihr))
+                                   Xtrans, Xslab)
+       Climo_T(:,:,:,iday,ihr) = Xslab(:,:,:)
 
        ! ---- Q ----
        if (masterproc) then
@@ -2435,7 +2457,8 @@ contains
        endif  ! masterproc
 
        call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
-                                   Xtrans, Climo_Q(1,1,begchunk,iday,ihr))
+                                   Xtrans, Xslab)
+       Climo_Q(:,:,:,iday,ihr) = Xslab(:,:,:)
 
      end do
    end do
