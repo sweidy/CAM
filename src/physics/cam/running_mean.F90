@@ -224,6 +224,7 @@ module running_mean
   private::interpret_filename_climo
   private::running_mean_set_profile
   private::running_mean_day_hour
+  private::running_mean_read_grid_fv
   
 
   ! running_mean Parameters
@@ -1035,6 +1036,28 @@ contains
    !----------------------------------------------------------
     call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
 
+   ! Gather grid information from analysis file
+
+   allocate(Lon_array(Running_mean_nlon),stat=istat)
+   call alloc_err(istat,'running_mean_init','Lon_array',Running_mean_nlon)
+   allocate(Lat_array(Running_mean_nlat),stat=istat)
+   call alloc_err(istat,'running_mean_init','Lat_array',Running_mean_nlat)
+   allocate(Lev_array(Running_mean_nlev),stat=istat)
+   call alloc_err(istat,'running_mean_init','Lev_array',Running_mean_nlev) 
+   
+   
+   call running_mean_read_grid_fv (trim(Target_Path)//trim(Target_File)) 
+#ifdef SPMD
+   ! Broadcast to all tasks so everyone has the same grid
+   call mpibcast(lon_array, Running_mean_nlon, mpir8, 0, mpicom)
+   call mpibcast(lat_array, Running_mean_nlat, mpir8, 0, mpicom)
+   call mpibcast(lev_array, Running_mean_nlev, mpir8, 0, mpicom)
+#endif
+
+   if (masterproc) then
+      write(iulog,*) 'lon, lat, lev', lon_array, lat_array, lev_array
+   endif
+
    ! Initialize running_mean Coeffcient profiles in local arrays
    ! Load zeros into running_mean arrays
    !------------------------------------------------------
@@ -1115,8 +1138,6 @@ contains
          call running_mean_read_climo_fv(trim(Running_mean_climo_infile))
       end if
    end if
-
-   ! Gather grid information for saving climo file
 
 
    ! End Routine
@@ -1946,6 +1967,7 @@ contains
    integer :: dim_lon, dim_lat, dim_lev, dim_day, dim_hour
    integer :: var_climo_u, var_climo_v, var_climo_t, var_climo_q
    integer :: var_nstep
+   integer :: var_lon, var_lat, var_lev
    integer :: nlon, nlat, nlev
    integer :: nday, nhour
    integer :: ilon, ilat, ilev
@@ -1978,7 +2000,6 @@ contains
 
    ! Define dimensions: lon, lat, lev, day, hour
    !---------------------------------------------
-   ! TODO: use actual longitude, rather than index
    istat = nf90_def_dim(ncid, 'lon',  nlon,  dim_lon)
    if (istat /= NF90_NOERR) then
       write(iulog,*) nf90_strerror(istat)
@@ -2008,6 +2029,32 @@ contains
       write(iulog,*) nf90_strerror(istat)
       call endrun('running_mean_write_climo_fv: def_dim hour')
    endif
+
+   istat = nf90_def_var(ncid, 'lon', nf90_double, (/dim_lon/), var_lon)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var lon')
+   endif
+   istat = nf90_put_att(ncid, var_lon, 'units', 'degrees_east')
+   istat = nf90_put_att(ncid, var_lon, 'long_name', 'longitude')
+
+   istat = nf90_def_var(ncid, 'lat', nf90_double, (/dim_lat/), var_lat)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var lat')
+   endif
+   istat = nf90_put_att(ncid, var_lat, 'units', 'degrees_north')
+   istat = nf90_put_att(ncid, var_lat, 'long_name', 'latitude')
+
+   istat = nf90_def_var(ncid, 'lev', nf90_double, (/dim_lev/), var_lev)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var lev')
+   endif
+   istat = nf90_put_att(ncid, var_lev, 'units', 'hPa')
+   istat = nf90_put_att(ncid, var_lev, 'long_name', 'hybrid level at midpoints (1000*(A+B))')
+   istat = nf90_put_att(ncid, var_lev, 'positive', 'down')
+   istat = nf90_put_att(ncid, var_lev, 'standard_name', 'atmosphere_hybrid_sigma_pressure_coordinate')
 
    ! Define variables Climo_* (lon,lat,lev,day,hour)
    !-----------------------------------------------
@@ -2056,6 +2103,26 @@ contains
       write(iulog,*) nf90_strerror(istat)
       write(iulog,*) 'nf90_enddef error: ', istat, ' ', trim(nf90_strerror(istat))
       call endrun('running_mean_write_climo_fv: nf90_enddef failed')
+   endif
+
+   !--------------------------------
+   ! Write lat/lon
+   istat = nf90_put_var(ncid, var_lon, Lon_array)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: put_var lon')
+   endif
+
+   istat = nf90_put_var(ncid, var_lat, Lat_array)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: put_var lat')
+   endif
+
+   istat = nf90_put_var(ncid, var_lev, Lev_array)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: put_var lev')
    endif
 
    ! Write Running_mean_nstep
@@ -2702,6 +2769,139 @@ end function interpret_filename_climo
     iday = doy
     ihour = sec / Running_mean_Step + 1  ! 1..Running_mean_Times_Per_Day
   end subroutine running_mean_day_hour
+
+
+  subroutine running_mean_read_grid_fv(anal_file)
+   !
+   ! Read FV grid from an analysis file:
+   !   lon_array(Running_mean_nlon)
+   !   lat_array(Running_mean_nlat)
+   !   lev_array(Running_mean_nlev)
+   !
+   use ppgrid        , only : pver
+   use cam_abortutils, only : endrun
+   use cam_logfile   , only : iulog
+   use spmd_utils    , only : masterproc
+   use netcdf
+
+   character(len=*), intent(in)  :: anal_file
+
+   integer :: istat, ncid, dimid
+   integer :: nlon, nlat, plev
+   integer :: varid
+
+   !---------------------------------------------------------------
+   ! Read grid from file on master
+   !---------------------------------------------------------------
+
+   if (masterproc) then
+
+    write(iulog,*) 'reading in grid from analysis file ', anal_file
+
+      istat = nf90_open(trim(anal_file), NF90_NOWRITE, ncid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) 'running_mean_read_grid_fv: nf90_open failed for ', trim(anal_file)
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: nf90_open failed')
+      endif
+
+      ! lon dimension
+      istat = nf90_inq_dimid(ncid, 'lon', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_dimid lon')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nlon)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inquire_dimension lon')
+      endif
+
+      ! lat dimension
+      istat = nf90_inq_dimid(ncid, 'lat', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_dimid lat')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nlat)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inquire_dimension lat')
+      endif
+
+      ! lev dimension
+      istat = nf90_inq_dimid(ncid, 'lev', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_dimid lev')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=plev)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inquire_dimension lev')
+      endif
+
+      ! Sanity check vs running-mean configuration
+      if ((Running_mean_nlon /= nlon) .or. &
+          (Running_mean_nlat /= nlat) .or. &
+          (Running_mean_nlev /= plev) .or. &
+          (plev /= pver)) then
+         write(iulog,*) 'ERROR running_mean_read_grid_fv: nlon=', nlon, &
+                        ' Running_mean_nlon=', Running_mean_nlon
+         write(iulog,*) 'ERROR running_mean_read_grid_fv: nlat=', nlat, &
+                        ' Running_mean_nlat=', Running_mean_nlat
+         write(iulog,*) 'ERROR running_mean_read_grid_fv: plev=', plev, &
+                        ' Running_mean_nlev=', Running_mean_nlev, ' pver=', pver
+         call endrun('running_mean_read_grid_fv: analysis dimension mismatch')
+      endif
+    
+
+      ! Read lon
+      istat = nf90_inq_varid(ncid, 'lon', varid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_varid lon')
+      endif
+      istat = nf90_get_var(ncid, varid, lon_array)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: get_var lon')
+      endif
+
+      ! Read lat
+      istat = nf90_inq_varid(ncid, 'lat', varid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_varid lat')
+      endif
+      istat = nf90_get_var(ncid, varid, lat_array)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: get_var lat')
+      endif
+
+      ! Read lev values (hybrid/pressure levels in file)
+      istat = nf90_inq_varid(ncid, 'lev', varid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: inq_varid lev')
+      endif
+      istat = nf90_get_var(ncid, varid, lev_array)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: get_var lev')
+      endif
+
+      ! Close file
+      istat = nf90_close(ncid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_grid_fv: nf90_close failed')
+      endif
+
+   endif  ! masterproc
+
+  end subroutine running_mean_read_grid_fv
 
 
 
