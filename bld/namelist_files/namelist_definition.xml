@@ -423,6 +423,28 @@
        Default: none
        </entry>
 
+<entry id="Running_mean_use_climo_restart" type="logical" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Initialize model running mean from restart file, rather than from 0.
+         TRUE  = initialize Climo_X from file
+         FALSE = initialize Climo_X as 0
+       Default: FALSE
+       </entry>
+
+<entry id="Running_mean_climo_infile" type="char*256" input_pathname="abs" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Filename of running mean climatology file if initializing from restart. 
+       Only used if Running_mean_use_climo_restart is True. Will read from run 
+       directory if path is not included in file. 
+       Default: none
+       </entry>
+
+<entry id="Running_mean_climo_outfile" type="char*256" input_pathname="abs" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Filename of running mean climatology file to save as restart. 
+       Default: running_mean_climo_%y-%m-%d-%s.nc
+       </entry>
+
 <entry id="Running_mean_Times_Per_Day" type="integer" category="running_mean"
        group="running_mean_nl" valid_values="" >
        Number of analyses files per day.

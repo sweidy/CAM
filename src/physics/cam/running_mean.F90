@@ -211,15 +211,19 @@ module running_mean
   implicit none
   private
 
-  public:: Running_mean_Model,Running_mean_ON, Running_mean_nudge_ON
+  public:: Running_mean_Model,Running_mean_ON, Running_mean_nudge_ON,Running_mean_climo_outfile
   public:: running_mean_readnl
   public:: running_mean_init
   public:: running_mean_timestep_init
   public:: running_mean_timestep_tend
+  public:: running_mean_write_climo_fv
+  private:: running_mean_read_climo_fv
   private::running_mean_update_model_fv
+  private::running_mean_write_model_fv
   private::running_mean_update_analyses_fv
   private::interpret_filename_climo
   private::running_mean_set_profile
+  private::running_mean_day_hour
   
 
   ! running_mean Parameters
@@ -230,8 +234,11 @@ module running_mean
   logical          :: Running_mean_Initialized =.false.
   character(len=cl):: Target_Path
   character(len=cs):: Target_File,Target_File_Template
-  character(len=cl):: Running_mean_Path
-  character(len=cs):: Running_mean_File,Running_mean_File_Template
+  ! character(len=cl):: Running_mean_Path
+  ! character(len=cs):: Running_mean_File,Running_mean_File_Template
+  logical          :: Running_mean_use_climo_restart = .false.
+  character(len=cl):: Running_mean_climo_infile  = ' '
+  character(len=cl):: Running_mean_climo_outfile = ' ' ! public
   integer          :: Running_mean_Force_Opt
   integer          :: Running_mean_TimeScale_Opt
   integer          :: Running_mean_TSmode
@@ -314,18 +321,29 @@ module running_mean
   real(r8),allocatable:: Running_mean_Vstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Sstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable:: Running_mean_Qstep (:,:,:)  !(pcols,pver,begchunk:endchunk)
-  integer,allocatable :: Running_mean_nstep (:)      ! accumulated number of steps used for running mean to date (time))
 
   ! running_mean Observation Arrays
-  !-----------------------------
-  integer               Running_mean_NumObs
+  !--------------------------------
+  integer               Running_mean_NumObs 
   integer,allocatable:: Running_mean_ObsInd(:)
   logical,allocatable:: Target_File_Present(:)  
-  logical            :: Running_mean_File_Present
-  real(r8),allocatable::Nobs_U (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
+  real(r8),allocatable::Nobs_U (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs) 
   real(r8),allocatable::Nobs_V (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
   real(r8),allocatable::Nobs_T (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
   real(r8),allocatable::Nobs_Q (:,:,:,:) !(pcols,pver,begchunk:endchunk,Running_mean_NumObs)
+
+  ! Climo memory arrays
+  !--------------------
+  integer               :: Running_mean_ntime      ! total climo time slots
+  integer, parameter    :: Running_mean_nday = 365 ! climatological days
+
+  ! In-memory running-mean climatology: [col, lev, chunk, day, hour]
+  real(r8), allocatable :: Climo_U(:,:,:,:,:)  ! (pcols,pver,begchunk:endchunk,nday,nhour)
+  real(r8), allocatable :: Climo_V(:,:,:,:,:)
+  real(r8), allocatable :: Climo_T(:,:,:,:,:)
+  real(r8), allocatable :: Climo_Q(:,:,:,:,:)
+  integer , allocatable :: Running_mean_nstep(:,:) ! (nday, nhour)
+
 
 contains
   !================================================================
@@ -349,7 +367,9 @@ contains
 
    namelist /running_mean_nl/ Running_mean_Model,Target_Path,                       &
                          Target_File_Template,Running_mean_Force_Opt,          &
-                         Running_mean_Path,Running_mean_File_Template, &
+                        !  Running_mean_Path,Running_mean_File_Template, &
+                         Running_mean_use_climo_restart,                         &
+                         Running_mean_climo_infile, Running_mean_climo_outfile,   &
                          Running_mean_TimeScale_Opt,                          &
                          Running_mean_Times_Per_Day,Running_mean_Model_times_Per_Day,      &
                          Running_mean_Ucoef ,Running_mean_Uprof,                     &
@@ -384,8 +404,11 @@ contains
    Target_Path          = '/n/holylfs06/LABS/kuang_lab/Lab/sweidman/MERRA2_OG/MERRA2_f19/'
    Target_File_Template = 'MERRA2_%m%d_%h.nc'
    Running_mean_Force_Opt     = 0
-   Running_mean_Path          = '/n/home04/sweidman/holylfs06/IC_CESM2/'
-   Running_mean_File_Template = 'cam_running_mean.%m-%d-%s.nc'
+  !  Running_mean_Path          = '/n/home04/sweidman/holylfs06/IC_CESM2/'
+  !  Running_mean_File_Template = 'cam_running_mean.%m-%d-%s.nc'
+   Running_mean_use_climo_restart = .false.
+   Running_mean_climo_infile      = ' '
+   Running_mean_climo_outfile     = 'running_mean_climo_%y-%m-%d-%s.nc'
    Running_mean_TimeScale_Opt = 0
    Running_mean_TSmode        = 0
    Running_mean_Times_Per_Day = 4
@@ -520,8 +543,11 @@ contains
 #ifdef SPMD
    call mpibcast(Target_Path         ,len(Target_Path)         ,mpichar,0,mpicom)
    call mpibcast(Target_File_Template,len(Target_File_Template),mpichar,0,mpicom)
-   call mpibcast(Running_mean_Path         ,len(Running_mean_Path)         ,mpichar,0,mpicom)
-   call mpibcast(Running_mean_File_Template,len(Running_mean_File_Template),mpichar,0,mpicom)
+  !  call mpibcast(Running_mean_Path         ,len(Running_mean_Path)         ,mpichar,0,mpicom)
+  !  call mpibcast(Running_mean_File_Template,len(Running_mean_File_Template),mpichar,0,mpicom)
+   call mpibcast(Running_mean_use_climo_restart , 1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_climo_infile      , len(Running_mean_climo_infile),  mpichar, 0, mpicom)
+   call mpibcast(Running_mean_climo_outfile     , len(Running_mean_climo_outfile), mpichar, 0, mpicom)
    call mpibcast(Running_mean_Model        , 1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_Initialized  , 1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_ON           , 1, mpilog, 0, mpicom)
@@ -567,8 +593,8 @@ contains
    call mpibcast(Running_mean_Vwin_Lindex  , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vwin_Ldelta  , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vwin_Invert,   1, mpilog, 0, mpicom)
-   call mpibcast(Running_mean_win_size,      1, mpilog, 0, mpicom)
-   call mpibcast(Running_mean_nstep_max,     1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_win_size,      1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nstep_max,     1, mpiint, 0, mpicom)
 #endif
 
    ! End Routine
@@ -656,9 +682,6 @@ contains
    call alloc_err(istat,'running_mean_init','Running_mean_T',pcols*pver*((endchunk-begchunk)+1))
    allocate(Running_mean_Q(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'running_mean_init','Running_mean_Q',pcols*pver*((endchunk-begchunk)+1))
-
-   allocate(Running_mean_nstep(Running_mean_win_size),stat=istat)
-   call alloc_err(istat, 'running_mean_init', 'Running_mean_nstep',Running_mean_win_size)
 
    ! Allocate Space for spatial dependence of 
    ! running_mean Coefs and running_mean Forcing.
@@ -835,7 +858,6 @@ contains
        Running_mean_ObsInd(nn) = Running_mean_NumObs+1-nn
      end do
      Target_File_Present(:)=.false.
-     Running_mean_File_Present=.false.
 
      ! Initialization is done, 
      !--------------------------
@@ -858,8 +880,8 @@ contains
      write(iulog,*) 'running_mean: Running_mean_Model=',Running_mean_Model
      write(iulog,*) 'running_mean: Target_Path=',Target_Path
      write(iulog,*) 'running_mean: Target_File_Template =',Target_File_Template
-     write(iulog,*) 'running_mean: Running_mean_Path=',Running_mean_Path
-     write(iulog,*) 'running_mean: Running_mean_File_Template =',Running_mean_File_Template
+    !  write(iulog,*) 'running_mean: Running_mean_Path=',Running_mean_Path
+    !  write(iulog,*) 'running_mean: Running_mean_File_Template =',Running_mean_File_Template
      write(iulog,*) 'running_mean: Running_mean_Force_Opt=',Running_mean_Force_Opt    
      write(iulog,*) 'running_mean: Running_mean_TimeScale_Opt=',Running_mean_TimeScale_Opt    
      write(iulog,*) 'running_mean: Running_mean_TSmode=',Running_mean_TSmode
@@ -914,8 +936,8 @@ contains
    ! Broadcast other variables that have changed
    !---------------------------------------------
 #ifdef SPMD
-   call mpibcast(Model_Step          ,            1, mpir8 , 0, mpicom)
-   call mpibcast(Running_mean_Step          ,            1, mpir8 , 0, mpicom)
+   call mpibcast(Model_Step          ,            1, mpiint , 0, mpicom)
+   call mpibcast(Running_mean_Step          ,            1, mpiint , 0, mpicom)
    call mpibcast(Model_Next_Year     ,            1, mpiint, 0, mpicom)
    call mpibcast(Model_Next_Month    ,            1, mpiint, 0, mpicom)
    call mpibcast(Model_Next_Day      ,            1, mpiint, 0, mpicom)
@@ -982,7 +1004,6 @@ contains
      write(iulog,*) 'running_mean: running_mean_init() begchunk:',begchunk,' endchunk=',endchunk
      write(iulog,*) 'running_mean: running_mean_init() chunk:',(endchunk-begchunk+1),' Running_mean_NumObs=',Running_mean_NumObs
      write(iulog,*) 'running_mean: running_mean_init() Running_mean_ObsInd=',Running_mean_ObsInd
-     write(iulog,*) 'running_mean: running_mean_init() Running_mean_File_Present=',Running_mean_File_Present
      write(iulog,*) 'running_mean: running_mean_init() Target_File_Present=',Target_File_Present
    endif
 !!DIAG
@@ -1055,7 +1076,42 @@ contains
      Target_Q(:pcols,:pver,lchnk)=0._r8
    end do
 
-   Running_mean_nstep(:)=0
+   ! Total number of climatology time slots: 365 days × files per day
+   Running_mean_ntime = Running_mean_nday * Running_mean_Times_Per_Day
+
+   ! Allocate in-memory climatology arrays
+   allocate(Climo_U(pcols,pver,begchunk:endchunk,Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
+   call alloc_err(istat,'running_mean_init','Climo_U',pcols*pver*((endchunk-begchunk)+1)*Running_mean_ntime)
+   allocate(Climo_V(pcols,pver,begchunk:endchunk,Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
+   call alloc_err(istat,'running_mean_init','Climo_V',pcols*pver*((endchunk-begchunk)+1)*Running_mean_ntime)
+   allocate(Climo_T(pcols,pver,begchunk:endchunk,Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
+   call alloc_err(istat,'running_mean_init','Climo_T',pcols*pver*((endchunk-begchunk)+1)*Running_mean_ntime)
+   allocate(Climo_Q(pcols,pver,begchunk:endchunk,Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
+   call alloc_err(istat,'running_mean_init','Climo_Q',pcols*pver*((endchunk-begchunk)+1)*Running_mean_ntime)
+
+   Climo_U(:pcols,:pver,begchunk:endchunk,:Running_mean_nday,:Running_mean_Times_Per_Day) = 0._r8
+   Climo_V(:pcols,:pver,begchunk:endchunk,:Running_mean_nday,:Running_mean_Times_Per_Day) = 0._r8
+   Climo_T(:pcols,:pver,begchunk:endchunk,:Running_mean_nday,:Running_mean_Times_Per_Day) = 0._r8
+   Climo_Q(:pcols,:pver,begchunk:endchunk,:Running_mean_nday,:Running_mean_Times_Per_Day) = 0._r8
+
+   ! Allocate and clear per-slot sample counts
+   allocate(Running_mean_nstep(Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
+   call alloc_err(istat,'running_mean_init','Running_mean_nstep',Running_mean_ntime)
+   Running_mean_nstep(:,:) = 0
+
+   ! -------------------------------------------------------------
+   ! Optional restart of climo fields from a previous run
+   ! -------------------------------------------------------------
+   if (Running_mean_use_climo_restart) then
+      if (trim(Running_mean_climo_infile) == ' ') then
+         if (masterproc) then
+            write(iulog,*) 'running_mean: use_climo_restart = .true. but no infile set; starting from zeros'
+         end if
+      else
+         call running_mean_read_climo_fv(trim(Running_mean_climo_infile))
+      end if
+   end if
+
 
    ! End Routine
    !------------
@@ -1215,30 +1271,19 @@ contains
         Model_S(:ncol,:pver,lchnk)=cpair*Model_T(:ncol,:pver,lchnk)
       end do
 
-      Running_mean_File=interpret_filename_spec(Running_mean_File_Template      , &
-                                        yr_spec=Running_mean_Curr_Year, &
-                                        mon_spec=Running_mean_Curr_Month, &
-                                        day_spec=Running_mean_Curr_Day  , &
-                                        sec_spec=Running_mean_Curr_Sec    ) ! Running_mean_Curr_Sec 
-      INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
+      ! Running_mean_File=interpret_filename_spec(Running_mean_File_Template      , &
+      !                                   yr_spec=Running_mean_Curr_Year, &
+      !                                   mon_spec=Running_mean_Curr_Month, &
+      !                                   day_spec=Running_mean_Curr_Day  , &
+      !                                   sec_spec=Running_mean_Curr_Sec    ) ! Running_mean_Curr_Sec 
+      ! INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
     
-      if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
-      if(masterproc) then
-        write(iulog,*) 'running_mean: Writing to file:',trim(Running_mean_Path)//trim(Running_mean_File)
-      endif
-
-      ! write model is where the running mean is updated
-      call running_mean_write_model_fv(trim(Running_mean_Path)//trim(Running_mean_File), Running_mean_Curr_Month, Running_mean_Curr_Day) 
-
-    !   if (.not. Running_mean_File_Present) print*, 'running mean file missing', Running_mean_File
-     
-    !  if(masterproc) then
-    !   write(iulog,*) 'running_mean: Reading analyses:',trim(Running_mean_Path)//trim(Running_mean_File)
-    !  endif
+      ! write model is where the running mean is updated ! 
+      call running_mean_write_model_fv(Running_mean_Curr_Month, Running_mean_Curr_Day, Running_mean_Curr_Sec) 
 
      ! update is where the nudging value is updated (reading from recently written value)
      !----------------------------------------------------------
-    call running_mean_update_model_fv (trim(Running_mean_Path)//trim(Running_mean_File), Running_mean_Curr_Month, Running_mean_Curr_Day)
+    call running_mean_update_model_fv (Running_mean_Curr_Month, Running_mean_Curr_Day, Running_mean_Curr_Sec)
 
     do lchnk=begchunk,endchunk
         ncol=phys_state(lchnk)%ncol
@@ -1341,7 +1386,7 @@ contains
   !  endif
 
    if((After_nudge_Beg).and.(Before_End)) then
-       Running_mean_nudge_ON=Running_mean_File_Present
+       Running_mean_nudge_ON=.true.
    else
      Running_mean_nudge_ON=.false.
    endif
@@ -1539,281 +1584,103 @@ contains
 
 
   !================================================================
-  subroutine running_mean_update_model_fv(running_mean_file, target_month, target_day)
+  subroutine running_mean_update_model_fv(target_month, target_day, target_sec)
+    use ppgrid    , only: pver,pcols,begchunk,endchunk
+    use phys_grid , only: get_ncols_p
+
+    integer, intent(in)         :: target_month, target_day, target_sec
+
+    integer :: iday, ihour
+    integer :: lchnk, ncol, i, k
+
+    call running_mean_day_hour(target_month, target_day, target_sec, iday, ihour)
+
+    if (masterproc) then
+        write(iulog,*) 'apply running mean: iday, ihour', iday, ihour
+     end if
+
+    do lchnk = begchunk, endchunk
+      ncol = get_ncols_p(lchnk)
+      do k = 1, pver
+      do i = 1, ncol
+          Running_nudge_U(i,k,lchnk) = Climo_U(i,k,lchnk,iday,ihour)
+          Running_nudge_V(i,k,lchnk) = Climo_V(i,k,lchnk,iday,ihour)
+          Running_nudge_T(i,k,lchnk) = Climo_T(i,k,lchnk,iday,ihour)
+          Running_nudge_Q(i,k,lchnk) = Climo_Q(i,k,lchnk,iday,ihour)
+      end do
+      end do
+    end do
+
+  end subroutine running_mean_update_model_fv
+
+  !================================================================
+
+  !================================================================
+  subroutine running_mean_write_model_fv(target_month, target_day, target_sec)
    ! 
    ! running_mean_UPDATE_ANALYSES_FV: 
-   !                 Open the given analyses data file, read in 
-   !                 U,V,T,Q, and PS values and then distribute
+   !                 Open the given analyses data file, write out in 
+   !                 U,V,T,Q, and PS values and after gathering from chunks
    !                 the values to all of the chunks.
    !===============================================================
-   use ppgrid ,only: pver,begchunk
-   use netcdf
+   use ppgrid ,only: pver,pcols,begchunk,endchunk
+    use phys_grid, only: get_ncols_p
 
    ! Arguments
    !-------------
-   character(len=*),intent(in):: running_mean_file
-   integer,intent(in):: target_month, target_day  ! adding for centered mean ++SW
+    integer, intent(in)       :: target_month, target_day, target_sec
 
-   ! Local values
-   !-------------
-   ! adding time variables ++SW
-   integer nlon,nlat,plev,istat,ntime
-   integer ncid,varid
-   integer ilat,ilon,ilev, iw
-   real(r8) Lat_anal(Running_mean_nlat)
-   real(r8) Lon_anal(Running_mean_nlon)
-   real(r8) Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
+    integer :: iday_center, ihour, iday2
+    integer :: iw, half
+    integer :: lchnk, ncol, i, k
+    integer :: nstep_old, nstep_new
+    real(r8):: wrk
 
-   ! adding for taking weighted mean ++SW
-   real(r8), allocatable :: Uslab(:,:,:)                      ! lon x lat x lev for one time
 
-   ! window config 
-   integer :: it_center   ! for creating centered window indices
-   integer, dimension(4) :: start, count ! for reading time dimension
+    ! center time slot in climo array
+    call running_mean_day_hour(target_month, target_day, target_sec, iday_center, ihour)
 
-   ! calculate doy
-   integer, dimension(12) :: cum = (/ 0,31,59,90,120,151,181,212,243,273,304,334 /)
-   integer :: ndoys = 365
-   integer :: doy, nstep_nudge
+    ! Define a centered window
+    half = (Running_mean_win_size - 1)/2
 
-   integer :: ndims, dimids(4), dimid, dimlen, k
-   character(len=NF90_MAX_NAME) :: dimname
+    if (masterproc) then
+        write(iulog,*) 'update running mean: iday_center, ihour', iday_center, ihour
+     end if
 
-   ! Just read in one file but will select times inside it
-   ! If the file is not there, then just return.
-   !------------------------------------------------------------------------
-   if(masterproc) then
-     inquire(FILE=trim(running_mean_file),EXIST=Running_mean_File_Present)
-     write(iulog,*)'running mean nudge: Running_mean_File_Present=',Running_mean_File_Present
-   endif
-#ifdef SPMD
-   call mpibcast(Running_mean_File_Present, 1, mpilog, 0, mpicom)
-#endif
-   if(.not.Running_mean_File_Present) return
+    do iw = -half, half
+     iday2 = modulo(iday_center - 1 + iw, Running_mean_nday) + 1
 
-   ! masterproc does all of the work here
-   !-----------------------------------------
-   if(masterproc) then
-   
-     ! Open the given file
-     !-----------------------
-     istat=nf90_open(trim(running_mean_file),NF90_NOWRITE,ncid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*)'NF90_OPEN: failed for file ',trim(running_mean_file)
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
+     nstep_old = Running_mean_nstep(iday2, ihour)
+     if (nstep_old >= Running_mean_nstep_max) then
+        nstep_new = Running_mean_nstep_max
+     else
+        nstep_new = max(0, nstep_old) + 1
+     end if
+     Running_mean_nstep(iday2, ihour) = nstep_new
+     wrk = 1._r8 / real(nstep_new, r8)
 
-     ! Read in Dimensions
-     !--------------------
-     istat=nf90_inq_dimid(ncid,'lon',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lon')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=nlon)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lon')
-     endif
-
-     istat=nf90_inq_dimid(ncid,'lat',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lat')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=nlat)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lat')
-     endif
-
-     istat=nf90_inq_dimid(ncid,'lev',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lev')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=plev)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lev')
-     endif
-
-     ! added read in time dimension ++SW
-     istat=nf90_inq_dimid(ncid,'time',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV time')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=ntime)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV time')
-     endif
-
-     istat=nf90_inq_varid(ncid,'lon',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Lon_anal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-
-     istat=nf90_inq_varid(ncid,'lat',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_get_var(ncid,varid,Lat_anal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     
-     if((Running_mean_nlon.ne.nlon).or.(Running_mean_nlat.ne.nlat).or.(plev.ne.pver)) then
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: nlon=',nlon,' Running_mean_nlon=',Running_mean_nlon
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: nlat=',nlat,' Running_mean_nlat=',Running_mean_nlat
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: plev=',plev,' pver=',pver
-      call endrun('running_mean_update_analyses_fv: analyses dimension mismatch')
-     endif
-
-     ! allocate extra time variables
-     allocate(Uslab(Running_mean_nlev,Running_mean_nlat,Running_mean_nlon))
-
-    ! calculate doy for time index of file
-    doy = cum(target_month) + target_day
-    it_center = doy !modulo(doy-1, ndoys) + 1
-    write(iulog,*) 'calculated it_center ', it_center
-
-    start = (/ 1, 1, 1, it_center /)
-    count = (/ plev, nlat, nlon, 1 /)
-
-    ! start reading in U
-    istat=nf90_inq_varid(ncid,'U',varid)
-    if(istat.ne.NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      call endrun ('UPDATE_ANALYSES_FV')
-    endif
-
-    ! U saved in lev, lat, lon, time order
-    istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
-    if (istat /= NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      write(iulog,*) 'start, count ', start, count
-      call endrun('UPDATE_ANALYSES_FV(U slab read)')
-    end if
-
-    do ilat = 1, nlat
-      do ilev = 1, plev
-        do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Uslab(ilev, ilat, ilon)
+     ! TODO: make sure this works and figure out why some gridpoints explode (wrk undefined?)
+     do lchnk = begchunk, endchunk
+        ncol = get_ncols_p(lchnk)
+        do k = 1, pver
+        do i = 1, ncol
+           Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
+           Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
+           Climo_T(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_T(i,k,lchnk,iday2,ihour) + wrk*Model_T(i,k,lchnk)
+           Climo_Q(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_Q(i,k,lchnk,iday2,ihour) + wrk*Model_Q(i,k,lchnk)
         end do
-      end do
-    end do
-    endif ! (masterproc) then
-    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Running_nudge_U(1,1,begchunk))
-
-   if(masterproc) then
-     ! start reading in V
-    istat=nf90_inq_varid(ncid,'V',varid)
-    if(istat.ne.NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      call endrun ('UPDATE_ANALYSES_FV')
-    endif
-
-    ! U saved in lev, lat, lon, time order
-    istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
-    if (istat /= NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      write(iulog,*) 'start, count ', start, count
-      call endrun('UPDATE_ANALYSES_FV(V slab read)')
-    end if
-
-    do ilat = 1, nlat
-      do ilev = 1, plev
-        do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Uslab(ilev, ilat, ilon)
         end do
-      end do
+     end do
     end do
-    endif ! (masterproc) then
-    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Running_nudge_V(1,1,begchunk))
 
-   if(masterproc) then
-     ! start reading in T
-    istat=nf90_inq_varid(ncid,'T',varid)
-    if(istat.ne.NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      call endrun ('UPDATE_ANALYSES_FV')
-    endif
-
-    ! U saved in lev, lat, lon, time order
-    istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
-    if (istat /= NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      write(iulog,*) 'start, count ', start, count
-      call endrun('UPDATE_ANALYSES_FV(T slab read)')
-    end if
-
-    do ilat = 1, nlat
-      do ilev = 1, plev
-        do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Uslab(ilev, ilat, ilon)
-        end do
-      end do
-    end do
-    endif ! (masterproc) then
-    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Running_nudge_T(1,1,begchunk))
-
-   if(masterproc) then
-     ! start reading in Q
-    istat=nf90_inq_varid(ncid,'Q',varid)
-    if(istat.ne.NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      call endrun ('UPDATE_ANALYSES_FV')
-    endif
-
-    ! U saved in lev, lat, lon, time order
-    istat = nf90_get_var(ncid, varid, Uslab, start=start, count=count)
-    if (istat /= NF90_NOERR) then
-      write(iulog,*) nf90_strerror(istat)
-      write(iulog,*) 'start, count ', start, count
-      call endrun('UPDATE_ANALYSES_FV(Q slab read)')
-    end if
-
-    do ilat = 1, nlat
-      do ilev = 1, plev
-        do ilon = 1, nlon
-          Xtrans(ilon, ilev, ilat) = Uslab(ilev, ilat, ilon)
-        end do
-      end do
-    end do
-    
-     ! Close the analyses file
-     !-----------------------
-     istat=nf90_close(ncid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-
-   endif ! (masterproc) then
-    call scatter_field_to_chunk(1,Running_mean_nlev,1,Running_mean_nlon,Xtrans,   &
-                               Running_nudge_Q(1,1,begchunk))
-
-   if (allocated(Uslab))     deallocate(Uslab)
-
+    ! if (masterproc) then
+    !     write(iulog,*) 'Running_mean_nstep', Running_mean_nstep
+    ! end if
 
    ! End Routine
    !------------
    return
-  end subroutine ! running_mean_update_model_fv
+  end subroutine ! running_mean_write_model_fv
   !================================================================
 
   !================================================================
@@ -2044,411 +1911,549 @@ contains
   end subroutine ! running_mean_update_analyses_fv
   !================================================================
 
-    !================================================================
-  subroutine running_mean_write_model_fv(running_mean_file, target_month, target_day)
-   ! 
-   ! running_mean_UPDATE_ANALYSES_FV: 
-   !                 Open the given analyses data file, write out in 
-   !                 U,V,T,Q, and PS values and after gathering from chunks
-   !                 the values to all of the chunks.
-   !===============================================================
-   use ppgrid ,only: pver,begchunk
+  subroutine running_mean_write_climo_fv(climo_file)
+   !
+   ! running_mean_WRITE_CLIMO_FV:
+   !   Gather the running-mean climo fields (U,V,T,Q) from the CAM
+   !   chunks onto the FV lon/lat grid and write them to a NetCDF file,
+   !   together with Running_mean_nstep(day,hour).
+   !-------------------------------------------------------------------
+   use ppgrid        , only: pver, begchunk, endchunk
+   use spmd_utils    , only: masterproc
+   use cam_abortutils, only: endrun
+   use cam_logfile   , only: iulog
    use netcdf
+#ifdef SPMD
+   use mpishorthand
+#endif
 
-   ! Arguments
-   !-------------
-   character(len=*),intent(in):: running_mean_file
-   integer, intent(in)        :: target_month, target_day
+   character(len=*), intent(in) :: climo_file
 
-   ! Local values
-   !-------------
-   ! adding time variables ++SW
-   integer nlon,nlat,plev,istat,ntime
-   integer ncid,varid,varid_t
-   integer ilat,ilon,ilev, iw
-   real(r8) Lat_anal(Running_mean_nlat)
-   real(r8) Lon_anal(Running_mean_nlon)
-   real(r8) Xmodel(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
+   integer :: istat
+   integer :: ncid
+   integer :: dim_lon, dim_lat, dim_lev, dim_day, dim_hour
+   integer :: var_climo_u, var_climo_v, var_climo_t, var_climo_q
+   integer :: var_nstep
+   integer :: nlon, nlat, nlev
+   integer :: nday, nhour
+   integer :: ilon, ilat, ilev
+   integer :: iday, ihr
+   real(r8) :: Xclimo(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)
+   real(r8) :: Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
 
-   ! adding for updating all timesteps within window ++SW
-   real, allocatable :: Time_anal(:)                      ! time dimension (e.g., days since ref)
-   real, allocatable :: Uslab_old(:,:,:)                      ! lon x lat x lev for one timestep
-   real, allocatable :: Uslab_new(:,:,:)
+   nlon  = Running_mean_nlon
+   nlat  = Running_mean_nlat
+   nlev  = Running_mean_nlev
+   nday  = Running_mean_nday
+   nhour = Running_mean_Times_Per_Day
 
-   ! window config (n-day window)
-   integer, dimension(Running_mean_win_size) :: win_offsets
-   integer, dimension(Running_mean_win_size) :: t_indices 
-   integer, allocatable :: nstep_array(:)
-   integer :: half, it_center   ! for creating centered window indices
-   integer :: itime
-   integer, dimension(4) :: start, count
 
-   ! for calculating nstep / wrk
-   real(r8) :: wrk
-   integer :: nstep_old, nstep_new
+   ! Create NetCDF file
+   !--------------------
+   if (masterproc) then
 
-   ! calculate doy
-   integer, dimension(12) :: cum = (/ 0,31,59,90,120,151,181,212,243,273,304,334 /)
-   integer :: ndoys = 365
-   integer :: doy
-   integer :: ndims, dimids(4), dimlen, k, dimid
-   character(len=NF90_MAX_NAME) :: dimname
+   !istat = nf90_create(trim(climo_file), NF90_CLOBBER, ncid)
+   istat = nf90_create(trim(climo_file), &
+                    IOR(NF90_CLOBBER, IOR(NF90_NETCDF4, NF90_CLASSIC_MODEL)), ncid)
 
-   ! Just read in one file but will select times inside it
-   ! If the file is not there, then just return.
-   !------------------------------------------------------------------------
-   if(masterproc) then
-     inquire(FILE=trim(running_mean_file),EXIST=Running_mean_File_Present)
-     write(iulog,*)'running mean nudge: Running_mean_File_Present=',Running_mean_File_Present
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) 'running_mean_write_climo_fv: nf90_create failed for ', trim(climo_file)
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: nf90_create failed')
+   endif
+
+   ! Define dimensions: lon, lat, lev, day, hour
+   !---------------------------------------------
+   ! TODO: use actual longitude, rather than index
+   ! TODO: check scattering is going into correct location based on chunking
+   istat = nf90_def_dim(ncid, 'lon',  nlon,  dim_lon)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_dim lon')
+   endif
+
+   istat = nf90_def_dim(ncid, 'lat',  nlat,  dim_lat)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_dim lat')
+   endif
+
+   istat = nf90_def_dim(ncid, 'lev',  nlev,  dim_lev)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_dim lev')
+   endif
+
+   istat = nf90_def_dim(ncid, 'day',  nday,  dim_day)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_dim day')
+   endif
+
+   istat = nf90_def_dim(ncid, 'hour', nhour, dim_hour)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_dim hour')
+   endif
+
+   ! Define variables Climo_* (lon,lat,lev,day,hour)
+   !-----------------------------------------------
+   istat = nf90_def_var(ncid, 'Climo_U', nf90_double, &
+                        (/dim_lon, dim_lat, dim_lev, dim_day, dim_hour/), var_climo_u)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var Climo_U')
+   endif
+
+   istat = nf90_def_var(ncid, 'Climo_V', nf90_double, &
+                        (/dim_lon, dim_lat, dim_lev, dim_day, dim_hour/), var_climo_v)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var Climo_V')
+   endif
+
+   istat = nf90_def_var(ncid, 'Climo_T', nf90_double, &
+                        (/dim_lon, dim_lat, dim_lev, dim_day, dim_hour/), var_climo_t)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var Climo_T')
+   endif
+
+   istat = nf90_def_var(ncid, 'Climo_Q', nf90_double, &
+                        (/dim_lon, dim_lat, dim_lev, dim_day, dim_hour/), var_climo_q)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var Climo_Q')
+   endif
+
+   ! Running_mean_nstep(day,hour)
+   istat = nf90_def_var(ncid, 'Running_mean_nstep', nf90_int, &
+                        (/dim_day, dim_hour/), var_nstep)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: def_var Running_mean_nstep')
+   endif
+
+   if (masterproc) then
+    write(iulog,*) 'nlon, nlat, nlev, nday, nhour = ', nlon, nlat, nlev, nday, nhour
+   end if 
+
+   istat = nf90_enddef(ncid)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      write(iulog,*) 'nf90_enddef error: ', istat, ' ', trim(nf90_strerror(istat))
+      call endrun('running_mean_write_climo_fv: nf90_enddef failed')
+   endif
+
+   ! Write Running_mean_nstep
+   !--------------------------
+   istat = nf90_put_var(ncid, var_nstep, Running_mean_nstep)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: put_var Running_mean_nstep')
+   endif
+
+  endif ! masterproc
+
+   ! Loop over day/hour and write climo fields
+   !  Climo_* are stored on chunks: (col,lev,chunk,day,hour)
+   !  We gather to Xtrans(lon,lev,lat), then transpose to Xclimo(lon,lat,lev)
+   !---------------------------------------------------------------------
+   do iday = 1, nday
+     do ihr = 1, nhour
+
+       ! ---- U ----
+       call gather_chunk_to_field(1, nlev, 1, nlon, &
+            Climo_U(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+
+       if (masterproc) then
+       do ilat = 1, nlat
+       do ilev = 1, nlev
+       do ilon = 1, nlon
+         Xclimo(ilon,ilat,ilev) = Xtrans(ilon,ilev,ilat)
+       end do
+       end do
+       end do
+
+       istat = nf90_put_var(ncid, var_climo_u, Xclimo, &
+                start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+       if (istat /= NF90_NOERR) then
+          write(iulog,*) nf90_strerror(istat)
+          call endrun('running_mean_write_climo_fv: put_var Climo_U')
+       endif
+       endif !masterproc
+
+       ! ---- V ----
+       call gather_chunk_to_field(1, nlev, 1, nlon, &
+            Climo_V(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+
+       if (masterproc) then
+       do ilat = 1, nlat
+       do ilev = 1, nlev
+       do ilon = 1, nlon
+         Xclimo(ilon,ilat,ilev) = Xtrans(ilon,ilev,ilat)
+       end do
+       end do
+       end do
+
+       istat = nf90_put_var(ncid, var_climo_v, Xclimo, &
+                start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+       if (istat /= NF90_NOERR) then
+          write(iulog,*) nf90_strerror(istat)
+          call endrun('running_mean_write_climo_fv: put_var Climo_V')
+       endif
+       endif ! masterproc
+
+       ! ---- T ----
+       call gather_chunk_to_field(1, nlev, 1, nlon, &
+            Climo_T(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+
+       if (masterproc) then
+       do ilat = 1, nlat
+       do ilev = 1, nlev
+       do ilon = 1, nlon
+         Xclimo(ilon,ilat,ilev) = Xtrans(ilon,ilev,ilat)
+       end do
+       end do
+       end do
+
+       istat = nf90_put_var(ncid, var_climo_t, Xclimo, &
+                start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+       if (istat /= NF90_NOERR) then
+          write(iulog,*) nf90_strerror(istat)
+          call endrun('running_mean_write_climo_fv: put_var Climo_T')
+       endif
+       endif ! masterproc
+
+       ! ---- Q ----
+       call gather_chunk_to_field(1, nlev, 1, nlon, &
+            Climo_Q(1,1,begchunk: endchunk,iday,ihr), Xtrans)
+
+       if (masterproc) then
+       do ilat = 1, nlat
+       do ilev = 1, nlev
+       do ilon = 1, nlon
+         Xclimo(ilon,ilat,ilev) = Xtrans(ilon,ilev,ilat)
+       end do
+       end do
+       end do
+
+       istat = nf90_put_var(ncid, var_climo_q, Xclimo, &
+                start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+       if (istat /= NF90_NOERR) then
+          write(iulog,*) nf90_strerror(istat)
+          call endrun('running_mean_write_climo_fv: put_var Climo_Q')
+       endif
+       endif
+
+     end do
+   end do
+
+   ! Close file
+   !------------
+   if (masterproc) then
+   istat = nf90_close(ncid)
+   if (istat /= NF90_NOERR) then
+      write(iulog,*) nf90_strerror(istat)
+      call endrun('running_mean_write_climo_fv: nf90_close failed')
+   endif
+   write(iulog,*) 'running_mean_write_climo_fv: wrote climo file ', trim(climo_file)
+   endif ! masterproc
+
+  end subroutine running_mean_write_climo_fv
+
+
+  subroutine running_mean_read_climo_fv(climo_file)
+   !
+   ! running_mean_READ_CLIMO_FV:
+   !   Read climo fields (U,V,T,Q) and Running_mean_nstep from a
+   !   NetCDF file on FV (lon,lat,lev,day,hour) grid and scatter to
+   !   CAM chunk space.
+   !-------------------------------------------------------------------
+   use ppgrid        , only: pver, begchunk, endchunk
+   use spmd_utils    , only: masterproc
+   use cam_abortutils, only: endrun
+   use cam_logfile   , only: iulog
+   use netcdf
+#ifdef SPMD
+   use mpishorthand
+#endif
+
+   character(len=*), intent(in) :: climo_file
+
+   integer :: istat
+   integer :: ncid, varid
+   integer :: dimid
+   integer :: nlon, nlat, nlev
+   integer :: nday, nhour
+   integer :: plev
+   integer :: ilon, ilat, ilev
+   integer :: iday, ihr
+   logical :: file_exists
+   integer :: var_climo_u, var_climo_v, var_climo_t, var_climo_q
+   integer :: var_nstep
+   real(r8) :: Xclimo(Running_mean_nlon,Running_mean_nlat,Running_mean_nlev)
+   real(r8) :: Xtrans(Running_mean_nlon,Running_mean_nlev,Running_mean_nlat)
+
+   ! Check existence on master
+   !---------------------------
+   if (masterproc) then
+      inquire(FILE=trim(climo_file), EXIST=file_exists)
+      if (.not. file_exists) then
+         write(iulog,*) 'running_mean_read_climo_fv: file not found: ', trim(climo_file)
+      endif
    endif
 #ifdef SPMD
-   call mpibcast(Running_mean_File_Present, 1, mpilog, 0, mpicom)
+   call mpibcast(file_exists, 1, mpilog, 0, mpicom)
 #endif
-   if(.not.Running_mean_File_Present) return
+   if (.not. file_exists) return
 
-   ! masterproc does all of the work here
-   !-----------------------------------------
-   if(masterproc) then
+   ! Master opens and reads dimensions
+   !-----------------------------------
+   if (masterproc) then
 
-    ! Open the given file
-     !-----------------------
-     istat=nf90_open(trim(running_mean_file),NF90_WRITE,ncid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*)'NF90_OPEN: failed for file ',trim(running_mean_file)
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-   
-   ! Read in Dimensions
-     !--------------------
-     istat=nf90_inq_dimid(ncid,'lon',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lon')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=nlon)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lon')
-     endif
-     istat=nf90_get_var(ncid,varid,Lon_anal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-
-     istat=nf90_inq_dimid(ncid,'lat',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lat')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=nlat)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lat')
-     endif
-     istat=nf90_get_var(ncid,varid,Lat_anal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-
-     istat=nf90_inq_dimid(ncid,'lev',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lev')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=plev)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV lev')
-     endif
-
-     if((Running_mean_nlon.ne.nlon).or.(Running_mean_nlat.ne.nlat).or.(plev.ne.pver)) then
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: nlon=',nlon,' Running_mean_nlon=',Running_mean_nlon
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: nlat=',nlat,' Running_mean_nlat=',Running_mean_nlat
-      write(iulog,*) 'ERROR: running_mean_update_analyses_fv: plev=',plev,' pver=',pver
-      call endrun('running_mean_update_analyses_fv: analyses dimension mismatch')
-     endif
-
-   ! added read in time dimension ++SW
-     istat=nf90_inq_dimid(ncid,'time',varid)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) 'time', nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     istat=nf90_inquire_dimension(ncid,varid,len=ntime)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-     allocate(Time_anal(ntime))
-     allocate(nstep_array(ntime))
-     istat=nf90_get_var(ncid,varid,Time_anal)
-     if(istat.ne.NF90_NOERR) then
-       write(iulog,*) nf90_strerror(istat)
-       call endrun ('UPDATE_ANALYSES_FV')
-     endif
-
-     istat = nf90_inq_varid(ncid, 'nstep_nudge', varid)
-      if(istat.ne.NF90_NOERR) then
-        write(iulog,*) 'nstep_nudge', nf90_strerror(istat)
-        call endrun ('UPDATE_ANALYSES_FV')
-      endif
-      istat=nf90_get_var(ncid,varid,nstep_array)
-      if(istat.ne.NF90_NOERR) then
-        write(iulog,*) nf90_strerror(istat)
-        call endrun ('UPDATE_ANALYSES_FV')
-      endif
-      write(iulog,*) 'nstep_array', nstep_array
-
-     ! allocate extra slab variables
-     allocate(Uslab_new(plev,Running_mean_nlat,Running_mean_nlon))
-     allocate(Uslab_old(plev,Running_mean_nlat,Running_mean_nlon))
-     count = (/ plev, nlat, nlon, 1/)
-
-    ! calculate doy for time index of file
-    doy = cum(target_month) + target_day
-    it_center = doy !modulo(doy-1, ndoys) + 1
-    write(iulog,*) 'target month, target day ', target_month, target_day
-    write(iulog,*) 'calculated doy, it_center ', doy, it_center
-
-    ! Define a centered window
-    half = (Running_mean_win_size - 1)/2
-    win_offsets = [(iw, iw=-half, half)] 
-
-    ! Map offsets to legal indices with wrap-around (use modulo year logic). 
-    do iw = 1, Running_mean_win_size
-      t_indices(iw) = modulo(it_center - 1 + win_offsets(iw), ntime) + 1  ! Fortran 1-based, modulo wrap
-    end do
-    endif ! masterproc
-
-    call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Model_U,Xmodel)
-    
-    if (masterproc) then
-      ! only update nstep array once
-      do iw = 1, Running_mean_win_size
-        itime = t_indices(iw)
-        nstep_old = nstep_array(itime)
-        if (nstep_old >= Running_mean_nstep_max) then
-        nstep_new = Running_mean_nstep_max
-        else
-          nstep_new = max(0, nstep_old) + 1 ! maybe this is one too many but tbd
-        endif
-        wrk = 1.0_r8 / real(nstep_new, r8)
-        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
-        ! update array with new nstep
-        nstep_array(itime) = nstep_new
-
-        ! open file and find U variable
-        start = (/ 1, 1, 1, itime /)
-        istat = nf90_inq_varid(ncid, 'U', varid)
-        if(istat.ne.NF90_NOERR) then
-          write(iulog,*) nf90_strerror(istat)
-          call endrun ('UPDATE_ANALYSES_FV')
-        endif
-        ! ! check dimensions for debugging
-        ! istat = nf90_inquire_variable(ncid, varid, ndims=ndims, dimids=dimids)
-        ! if(istat.ne.NF90_NOERR) then
-        !   write(iulog,*) nf90_strerror(istat)
-        !   call endrun ('UPDATE_ANALYSES_FV')
-        ! endif
-        ! do k=1, ndims
-        !   dimid = dimids(k)
-        !   istat = nf90_inquire_dimension(ncid, dimid, name=dimname, len=dimlen)
-        !   write(iulog,*) 'U dim', k, ':', trim(dimname), ' len=', dimlen
-        ! end do
-        ! read in old running mean
-        istat = nf90_get_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'get_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-        ! reshape current model timestep to slab grid
-        do ilat=1,nlat
-        do ilev=1,plev
-        do ilon=1,nlon
-          Uslab_new(ilev,ilat,ilon)=Xmodel(ilon,ilev,ilat)
-        end do
-        end do
-        end do
-
-        Uslab_old = Uslab_old*(1.0_r8 - wrk) + Uslab_new*wrk
-
-        ! write updated slab to file
-        istat = nf90_put_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'put_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-
-      end do ! do iw
-    endif ! (masterproc) then
-
-    call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Model_V,Xmodel)
-    
-    if (masterproc) then
-      ! nstep has already been updated by U
-      do iw = 1, Running_mean_win_size
-        itime = t_indices(iw)
-        nstep_new = nstep_array(itime)
-        wrk = 1.0_r8 / real(nstep_new, r8)
-        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
-
-        ! open file and find V variable
-        start = (/ 1, 1, 1, itime /)
-        istat = nf90_inq_varid(ncid, 'V', varid)
-        if(istat.ne.NF90_NOERR) then
-          write(iulog,*) nf90_strerror(istat)
-          call endrun ('UPDATE_ANALYSES_FV')
-        endif
-        ! read in old running mean
-        istat = nf90_get_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'get_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-        ! reshape current model timestep to slab grid
-        do ilat=1,nlat
-        do ilev=1,plev
-        do ilon=1,nlon
-          Uslab_new(ilev,ilat,ilon)=Xmodel(ilon,ilev,ilat)
-        end do
-        end do
-        end do
-
-        Uslab_old = Uslab_old*(1.0_r8 - wrk) + Uslab_new*wrk
-
-        ! write updated slab to file
-        istat = nf90_put_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'put_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-
-      end do ! do iw
-    endif ! (masterproc) then
-
-    call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Model_T,Xmodel)
-    
-    if (masterproc) then
-      ! nstep has already been updated by U
-      do iw = 1, Running_mean_win_size
-        itime = t_indices(iw)
-        nstep_new = nstep_array(itime)
-        wrk = 1.0_r8 / real(nstep_new, r8)
-        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
-
-        ! open file and find V variable
-        start = (/ 1, 1, 1, itime /)
-        istat = nf90_inq_varid(ncid, 'T', varid)
-        if(istat.ne.NF90_NOERR) then
-          write(iulog,*) nf90_strerror(istat)
-          call endrun ('UPDATE_ANALYSES_FV')
-        endif
-        ! read in old running mean
-        istat = nf90_get_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'get_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-        ! reshape current model timestep to slab grid
-        do ilat=1,nlat
-        do ilev=1,plev
-        do ilon=1,nlon
-          Uslab_new(ilev,ilat,ilon)=Xmodel(ilon,ilev,ilat)
-        end do
-        end do
-        end do
-
-        Uslab_old = Uslab_old*(1.0_r8 - wrk) + Uslab_new*wrk
-
-        ! write updated slab to file
-        istat = nf90_put_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'put_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-
-      end do ! do iw
-    endif ! (masterproc) then
-
-    call gather_chunk_to_field(1,Running_mean_nlev,1,Running_mean_nlon,Model_Q,Xmodel)
-    
-    if (masterproc) then
-      ! nstep has already been updated by U
-      do iw = 1, Running_mean_win_size
-        itime = t_indices(iw)
-        nstep_new = nstep_array(itime)
-        wrk = 1.0_r8 / real(nstep_new, r8)
-        !write(iulog,*) 'wrk for nstep and itime: ', wrk,nstep_new,itime
-
-        ! open file and find V variable
-        start = (/ 1, 1, 1, itime /)
-        istat = nf90_inq_varid(ncid, 'Q', varid)
-        if(istat.ne.NF90_NOERR) then
-          write(iulog,*) nf90_strerror(istat)
-          call endrun ('UPDATE_ANALYSES_FV')
-        endif
-        ! read in old running mean
-        istat = nf90_get_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'get_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-        ! reshape current model timestep to slab grid
-        do ilat=1,nlat
-        do ilev=1,plev
-        do ilon=1,nlon
-          Uslab_new(ilev,ilat,ilon)=Xmodel(ilon,ilev,ilat)
-        end do
-        end do
-        end do
-
-        Uslab_old = Uslab_old*(1.0_r8 - wrk) + Uslab_new*wrk
-
-        ! write updated slab to file
-        istat = nf90_put_var(ncid, varid, Uslab_old, start=start, count=count)
-        if (istat /= NF90_NOERR) then
-          write(iulog,*) 'put_var failed: ', nf90_strerror(istat)
-          call endrun('UPDATE_ANALYSES_FV')
-        endif
-
-      end do ! do iw
-
-      istat = nf90_inq_varid(ncid, 'nstep_nudge', varid)
-      if(istat.ne.NF90_NOERR) then
-        write(iulog,*) 'nstep_nudge', nf90_strerror(istat)
-        call endrun ('UPDATE_ANALYSES_FV')
-      endif
-      istat=nf90_put_var(ncid,varid,nstep_array)
-      if(istat.ne.NF90_NOERR) then
-        write(iulog,*) 'put_var nstep_array', nf90_strerror(istat)
-        call endrun ('UPDATE_ANALYSES_FV')
+      istat = nf90_open(trim(climo_file), NF90_NOWRITE, ncid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) 'running_mean_read_climo_fv: nf90_open failed for ', trim(climo_file)
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: nf90_open failed')
       endif
 
-      istat = nf90_sync(ncid)
-      if (istat .ne. NF90_NOERR) then
-        write(iulog,*) nf90_strerror(istat)
-        call endrun('UPDATE_ANALYSES_FV')
+      ! lon
+      istat = nf90_inq_dimid(ncid, 'lon', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no lon dim')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nlon)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: inquire lon dim')
       endif
 
+      ! lat
+      istat = nf90_inq_dimid(ncid, 'lat', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no lat dim')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nlat)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: inquire lat dim')
+      endif
+
+      ! lev
+      istat = nf90_inq_dimid(ncid, 'lev', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no lev dim')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=plev)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: inquire lev dim')
+      endif
+      nlev = plev
+
+      ! day
+      istat = nf90_inq_dimid(ncid, 'day', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no day dim')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nday)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: inquire day dim')
+      endif
+
+      ! hour
+      istat = nf90_inq_dimid(ncid, 'hour', dimid)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no hour dim')
+      endif
+      istat = nf90_inquire_dimension(ncid, dimid, len=nhour)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: inquire hour dim')
+      endif
+
+      ! Dimension consistency checks
+      !------------------------------
+      if ((nlon  /= Running_mean_nlon) .or. &
+          (nlat  /= Running_mean_nlat) .or. &
+          (nlev  /= Running_mean_nlev)) then
+         write(iulog,*) 'ERROR: running_mean_read_climo_fv: nlon=',nlon,' Running_mean_nlon=',Running_mean_nlon
+         write(iulog,*) 'ERROR: running_mean_read_climo_fv: nlat=',nlat,' Running_mean_nlat=',Running_mean_nlat
+         write(iulog,*) 'ERROR: running_mean_read_climo_fv: nlev=',nlev,' Running_mean_nlev=',Running_mean_nlev
+         call endrun('running_mean_read_climo_fv: horizontal/vertical dimension mismatch')
+      endif
+
+      if ((nday  /= Running_mean_nday) .or. &
+          (nhour /= Running_mean_Times_Per_Day)) then
+         write(iulog,*) 'ERROR: running_mean_read_climo_fv: nday=',nday, &
+                        ' Running_mean_nday=',Running_mean_nday
+         write(iulog,*) 'ERROR: running_mean_read_climo_fv: nhour=',nhour, &
+                        ' Running_mean_Times_Per_Day=',Running_mean_Times_Per_Day
+         call endrun('running_mean_read_climo_fv: day/hour dimension mismatch')
+      endif
+
+      ! Get variable ids
+      !------------------
+      istat = nf90_inq_varid(ncid, 'Climo_U', var_climo_u)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no Climo_U')
+      endif
+
+      istat = nf90_inq_varid(ncid, 'Climo_V', var_climo_v)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no Climo_V')
+      endif
+
+      istat = nf90_inq_varid(ncid, 'Climo_T', var_climo_t)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no Climo_T')
+      endif
+
+      istat = nf90_inq_varid(ncid, 'Climo_Q', var_climo_q)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no Climo_Q')
+      endif
+
+      istat = nf90_inq_varid(ncid, 'Running_mean_nstep', var_nstep)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: no Running_mean_nstep')
+      endif
+
+      ! Read Running_mean_nstep and close later
+      !-----------------------------------------
+      istat = nf90_get_var(ncid, var_nstep, Running_mean_nstep)
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: get_var Running_mean_nstep')
+      endif
+
+   endif  ! masterproc
+
+#ifdef SPMD
+   ! Broadcast nstep to all tasks
+   call mpibcast(Running_mean_nstep, Running_mean_nday*Running_mean_Times_Per_Day, &
+                 mpiint, 0, mpicom)
+#endif
+
+   ! Now loop over day/hour and read climo fields, scatter to chunks
+   !-----------------------------------------------------------------
+   do iday = 1, Running_mean_nday
+     do ihr = 1, Running_mean_Times_Per_Day
+
+       ! ---- U ----
+       if (masterproc) then
+          istat = nf90_get_var(ncid, var_climo_u, Xclimo, &
+                   start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+          if (istat /= NF90_NOERR) then
+             write(iulog,*) nf90_strerror(istat)
+             call endrun('running_mean_read_climo_fv: get_var Climo_U')
+          endif
+
+          do ilat = 1, nlat
+          do ilev = 1, nlev
+          do ilon = 1, nlon
+             Xtrans(ilon,ilev,ilat) = Xclimo(ilon,ilat,ilev)
+          end do
+          end do
+          end do
+       endif  ! masterproc
+
+       call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
+                                   Xtrans, Climo_U(1,1,begchunk,iday,ihr))
+
+       ! ---- V ----
+       if (masterproc) then
+          istat = nf90_get_var(ncid, var_climo_v, Xclimo, &
+                   start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+          if (istat /= NF90_NOERR) then
+             write(iulog,*) nf90_strerror(istat)
+             call endrun('running_mean_read_climo_fv: get_var Climo_V')
+          endif
+
+          do ilat = 1, nlat
+          do ilev = 1, nlev
+          do ilon = 1, nlon
+             Xtrans(ilon,ilev,ilat) = Xclimo(ilon,ilat,ilev)
+          end do
+          end do
+          end do
+       endif  ! masterproc
+
+       call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
+                                   Xtrans, Climo_V(1,1,begchunk,iday,ihr))
+
+       ! ---- T ----
+       if (masterproc) then
+          istat = nf90_get_var(ncid, var_climo_t, Xclimo, &
+                   start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+          if (istat /= NF90_NOERR) then
+             write(iulog,*) nf90_strerror(istat)
+             call endrun('running_mean_read_climo_fv: get_var Climo_T')
+          endif
+
+          do ilat = 1, nlat
+          do ilev = 1, nlev
+          do ilon = 1, nlon
+             Xtrans(ilon,ilev,ilat) = Xclimo(ilon,ilat,ilev)
+          end do
+          end do
+          end do
+       endif  ! masterproc
+
+       call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
+                                   Xtrans, Climo_T(1,1,begchunk,iday,ihr))
+
+       ! ---- Q ----
+       if (masterproc) then
+          istat = nf90_get_var(ncid, var_climo_q, Xclimo, &
+                   start=(/1,1,1,iday,ihr/), count=(/nlon,nlat,nlev,1,1/))
+          if (istat /= NF90_NOERR) then
+             write(iulog,*) nf90_strerror(istat)
+             call endrun('running_mean_read_climo_fv: get_var Climo_Q')
+          endif
+
+          do ilat = 1, nlat
+          do ilev = 1, nlev
+          do ilon = 1, nlon
+             Xtrans(ilon,ilev,ilat) = Xclimo(ilon,ilat,ilev)
+          end do
+          end do
+          end do
+       endif  ! masterproc
+
+       call scatter_field_to_chunk(1, Running_mean_nlev, 1, Running_mean_nlon, &
+                                   Xtrans, Climo_Q(1,1,begchunk,iday,ihr))
+
+     end do
+   end do
+
+   ! Close file on master
+   !----------------------
+   if (masterproc) then
       istat = nf90_close(ncid)
-      if (istat .ne. NF90_NOERR) then
-        write(iulog,*) nf90_strerror(istat)
-        call endrun('UPDATE_ANALYSES_FV')
+      if (istat /= NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun('running_mean_read_climo_fv: nf90_close failed')
       endif
-    endif ! (masterproc) then
+      write(iulog,*) 'running_mean_read_climo_fv: read climo file ', trim(climo_file)
+   endif
 
-   if (allocated(Time_anal)) deallocate(Time_anal)
-   if (allocated(nstep_array)) deallocate(nstep_array)
-   if (allocated(Uslab_new)) deallocate(Uslab_new)
-   if (allocated(Uslab_old)) deallocate(Uslab_old)
+  end subroutine running_mean_read_climo_fv
 
-   ! End Routine
-   !------------
-   return
-  end subroutine ! running_mean_write_model_fv
+
   
   !================================================================
 
@@ -2659,5 +2664,22 @@ end function interpret_filename_climo
    return
   end subroutine ! running_mean_set_profile
   !================================================================
+
+    !-----------------------------------------------------------------
+  ! Map (month, day, sec) to climatology index [1 .. DOY], [1 .. Hour]
+  !-----------------------------------------------------------------
+  subroutine running_mean_day_hour(mon, day, sec, iday, ihour)
+    integer, intent(in)  :: mon, day, sec
+    integer, intent(out) :: iday, ihour
+    integer, dimension(12) :: cum
+    integer :: doy
+
+    cum = (/ 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 /)
+    doy  = cum(mon) + day          ! 1..365
+    iday = doy
+    ihour = sec / Running_mean_Step + 1  ! 1..Running_mean_Times_Per_Day
+  end subroutine running_mean_day_hour
+
+
 
 end module running_mean

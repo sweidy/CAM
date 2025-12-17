@@ -84,6 +84,7 @@ subroutine cam_write_restart(cam_in, cam_out, dyn_out, pbuf2d, &
    use restart_physics,  only: write_restart_physics, init_restart_physics
    use cam_history,      only: write_restart_history, init_restart_history
    use cam_instance,     only: inst_suffix
+   use running_mean,     only: Running_mean_Model, running_mean_write_climo_fv, Running_mean_climo_outfile 
 
    ! Arguments
    type(cam_in_t),          intent(in) :: cam_in(:)
@@ -100,6 +101,7 @@ subroutine cam_write_restart(cam_in, cam_out, dyn_out, pbuf2d, &
    character(len=cl) :: fname  ! Restart filename
    type(file_desc_t) :: fh
    integer           :: ierr
+   character(len=cl) :: rm_fname  ! Restart filename for running_mean climo
    !-----------------------------------------------------------------------
 
    ! Set template for primary restart filename based on instance suffix
@@ -145,6 +147,16 @@ subroutine cam_write_restart(cam_in, cam_out, dyn_out, pbuf2d, &
       
    ! Update the restart pointer file
    call write_rest_pfile(fname)
+
+   if (Running_mean_Model) then
+      if (present(yr_spec).and.present(mon_spec).and.present(day_spec).and.present(sec_spec)) then
+         rm_fname = interpret_filename_spec( Running_mean_climo_outfile, &
+              yr_spec=yr_spec, mon_spec=mon_spec, day_spec=day_spec, sec_spec= sec_spec )
+      else
+         rm_fname = interpret_filename_spec( Running_mean_climo_outfile )
+      end if
+      call running_mean_write_climo_fv(trim(rm_fname))
+   end if 
 
 end subroutine cam_write_restart
 

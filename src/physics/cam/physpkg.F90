@@ -1202,23 +1202,30 @@ contains
       endif
       endif
       ! update analysis and timestep for one step after timestep_tend
-      if(masterproc) then 
-         write(iulog,*) "corrector timestep init "
-      endif
       if (Force_Model) call corrector_timestep_init(phys_state)
 
     ! Update Running mean values, if needed
     !----------------------------------
     if(Running_mean_Model) then
-      call running_mean_timestep_init(phys_state)
+      
       if(Running_mean_ON) then
       nstep = get_nstep()
+      if(masterproc) then 
+      write(iulog,*) "before running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      if (nstep > 0) then 
       do c=begchunk,endchunk
          call running_mean_timestep_tend(phys_state(c),ptend) 
          call physics_update(phys_state(c),ptend,ztodt,phys_tend(c))
          call check_energy_chng(phys_state(c), phys_tend(c), "running_mean", nstep, ztodt, zero, zero, zero, zero)
       end do
       endif
+      if(masterproc) then 
+         write(iulog,*) "after running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      endif
+      endif
+      
+      call running_mean_timestep_init(phys_state)
     endif
 
     do c=begchunk,endchunk
