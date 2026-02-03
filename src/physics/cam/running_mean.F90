@@ -291,6 +291,8 @@ module running_mean
   real(r8)         :: Running_mean_Hwin_min
   integer          :: Running_mean_win_size
   integer          :: Running_mean_nstep_max
+  integer          :: log_vert_level
+  logical          :: Running_mean_switch_integrate ! change to integrated running mean
 
   ! running_mean State Arrays
   !-----------------------
@@ -391,7 +393,8 @@ contains
                          Running_mean_Vwin_Lindex,Running_mean_Vwin_Hindex,          &
                          Running_mean_Vwin_Ldelta,Running_mean_Vwin_Hdelta,          &
                          Running_mean_Vwin_Invert,                            &
-                         Running_mean_win_size, Running_mean_nstep_max
+                         Running_mean_win_size, Running_mean_nstep_max,       &
+                         Running_mean_switch_integrate
 
    ! running_mean is NOT initialized yet, For now
    ! running_mean will always begin/end at midnight.
@@ -453,6 +456,8 @@ contains
    Running_mean_Vwin_hi       = 1.0_r8
    Running_mean_win_size      = 15
    Running_mean_nstep_max     = 500 ! when to stop accumulating mean
+   log_vert_level             = 20
+   Running_mean_switch_integrate = .false.
 
    ! Read in namelist values
    !------------------------
@@ -600,6 +605,7 @@ contains
    call mpibcast(Running_mean_Vwin_Invert,   1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_win_size,      1, mpiint, 0, mpicom)
    call mpibcast(Running_mean_nstep_max,     1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_switch_integrate,     1, mpilog, 0, mpicom)
 #endif
 
    ! End Routine
@@ -1473,10 +1479,10 @@ contains
                                            +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
        end do
        if (masterproc) then
-        write(iulog,*) 'day, sec, Tfrac', Target_Curr_Day, Target_Curr_Sec, Tfrac ! 
-        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
-        write(iulog,*) 'Nobs_U(1,20,1,1) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(1))
-        write(iulog,*) 'Nobs_U(1,20,1,2) = ', Nobs_U(1,20,begchunk,Running_mean_ObsInd(2))
+        write(iulog,*) 'day, sec, Tfrac, log_vert_level', Target_Curr_Day, Target_Curr_Sec, Tfrac, log_vert_level ! 
+        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
+        write(iulog,*) 'Nobs_U(1,v,1,1) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(1))
+        write(iulog,*) 'Nobs_U(1,v,1,2) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(2))
        end if
      else
        write(iulog,*) 'Running_mean: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
@@ -1526,11 +1532,12 @@ contains
 
      if (masterproc) then
         write(iulog,*) 'after ustep is calculated'
-        write(iulog,*) 'Target_S(1,20,1) = ', Target_S(1,20,begchunk)
-        write(iulog,*) 'Model_S(1,20,1) = ', Model_S(1,20,begchunk)
-        write(iulog,*) 'Running_nudge_S(1,20,1) = ', Running_nudge_S(1,20,begchunk)
-        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk) 
-        write(iulog,*) 'Running_nudge_U(1,20,1) = ', Running_nudge_U(1,20,begchunk)  
+        write(iulog,*) 'Target_S(1,v,1) = ', Target_S(1,log_vert_level,begchunk)
+        write(iulog,*) 'Model_S(1,v,1) = ', Model_S(1,log_vert_level,begchunk)
+        write(iulog,*) 'Running_nudge_S(1,v,1) = ', Running_nudge_S(1,log_vert_level,begchunk)
+        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
+        write(iulog,*) 'Model_U(1,v,1) = ', Model_U(1,log_vert_level,begchunk) 
+        write(iulog,*) 'Running_nudge_U(1,v,1) = ', Running_nudge_U(1,log_vert_level,begchunk)  
      end if
 
      !******************
@@ -1586,11 +1593,16 @@ contains
 
    if((Running_mean_ON).and.(Running_mean_nudge_ON)) then
 
-    !  if (masterproc) then
-    !     write(iulog,*) 'Running mean nudge on, applying tendency'
-    !  end if
+     
      lchnk=phys_state%lchnk
      ncol =phys_state%ncol
+
+   !   if (masterproc) then
+   !      write(iulog,*) 'running_mean_timestep_tend before save'
+   !      write(iulog,*) 'phys_tend empty?', phys_tend%u(1,20)
+   !      write(iulog,*) 'Running_mean_Ustep', Running_mean_Ustep(1,20,lchnk)
+   !   end if
+
      phys_tend%u(:ncol,:pver)     =Running_mean_Ustep(:ncol,:pver,lchnk)
      phys_tend%v(:ncol,:pver)     =Running_mean_Vstep(:ncol,:pver,lchnk)
      phys_tend%s(:ncol,:pver)     =Running_mean_Sstep(:ncol,:pver,lchnk)
@@ -1600,6 +1612,11 @@ contains
      call outfld( 'Running_nudge_V',phys_tend%v                ,pcols,lchnk)
      call outfld( 'Running_nudge_T',phys_tend%s/cpair          ,pcols,lchnk)
      call outfld( 'Running_nudge_Q',phys_tend%q(1,1,indw)      ,pcols,lchnk)
+
+   !   if (masterproc) then
+   !      write(iulog,*) 'running_mean_timestep_tend after save'
+   !      write(iulog,*) 'phys_tend empty?', phys_tend%u(1,20)
+   !   end if
 
    endif
 
@@ -1686,28 +1703,17 @@ contains
      Running_mean_nstep(iday2, ihour) = nstep_new
      wrk = 1._r8 / real(nstep_new, r8)
 
-    !  if (masterproc) then
-    !     write(iulog,*) 'iday2, ihour, wrk', iday2,ihour,wrk
-    !     write(iulog,*) 'Climo_U, Model_U', Climo_U(1,20,begchunk,iday2,ihour),Model_U(1,20,begchunk)
-    !     write(iulog,*) 'Climo_Q, Model_Q', Climo_Q(1,20,begchunk,iday2,ihour),Model_Q(1,20,begchunk)
-    !  end if
-
      do lchnk = begchunk, endchunk
         ncol = get_ncols_p(lchnk)
         do k = 1, pver
         do i = 1, ncol
-           Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
-           Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
-           Climo_T(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_T(i,k,lchnk,iday2,ihour) + wrk*Model_T(i,k,lchnk)
-           Climo_Q(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_Q(i,k,lchnk,iday2,ihour) + wrk*Model_Q(i,k,lchnk)
+            Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
+            Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
+            Climo_T(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_T(i,k,lchnk,iday2,ihour) + wrk*Model_T(i,k,lchnk)
+            Climo_Q(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_Q(i,k,lchnk,iday2,ihour) + wrk*Model_Q(i,k,lchnk)
         end do
         end do
      end do
-
-    !  if (masterproc) then
-    !     write(iulog,*) 'after mean Climo_U', Climo_U(1,20,begchunk,iday2,ihour)
-    !     write(iulog,*) 'after mean Climo_Q', Climo_Q(1,20,begchunk,iday2,ihour)
-    !   end if
     end do
 
    ! End Routine

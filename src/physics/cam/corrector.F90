@@ -225,6 +225,7 @@ module corrector
   real(r8)         :: Force_Hwin_lonWidthH
   real(r8)         :: Force_Hwin_max
   real(r8)         :: Force_Hwin_min
+  integer          :: log_vert_level
 
   ! corrector State Arrays
   !-----------------------
@@ -333,6 +334,7 @@ contains
    Force_Vwin_Invert   = .false.
    Force_Vwin_lo       = 0.0_r8
    Force_Vwin_hi       = 1.0_r8
+   log_vert_level      = 20
 
    ! Read in namelist values
    !------------------------
@@ -920,11 +922,11 @@ contains
      end do
 
      if (masterproc) then
-        write(iulog,*)  'day, sec', Force_Curr_Day, Force_Curr_Sec
-        write(iulog,*) 'Force_Utau(1,20,1) = ', Force_Utau(1,20,begchunk)
-        write(iulog,*) 'Target_U(1,20,1) = ', Target_U(1,20,begchunk)
-        write(iulog,*) 'Force_Ustep(1,20,1) = ', Force_Ustep(1,20,begchunk)
-        write(iulog,*) 'state%u(1,20) - ', phys_state(begchunk)%u(1,20)
+        write(iulog,*)  'day, sec, log_vert_level', Force_Curr_Day, Force_Curr_Sec, log_vert_level
+        write(iulog,*) 'Force_Utau(1,v,1) = ', Force_Utau(1,log_vert_level,begchunk)
+        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
+        write(iulog,*) 'Force_Ustep(1,v,1) = ', Force_Ustep(1,log_vert_level,begchunk)
+        write(iulog,*) 'state%u(1,v) - ', phys_state(begchunk)%u(1,log_vert_level)
      end if
 
    endif ! ((Before_End).and.(Update_Force)) then

@@ -221,6 +221,7 @@ module nudging
   private::nudging_set_PSprofile
   private::nudging_set_profile
   private::calc_DryStaticEnergy
+  private::interpret_filename_merra
 
   ! Nudging Parameters
   !--------------------
@@ -253,6 +254,7 @@ module nudging
   integer          :: Model_Curr_Day ,Model_Curr_Sec
   integer          :: Model_Next_Year,Model_Next_Month
   integer          :: Model_Next_Day ,Model_Next_Sec
+  integer          :: modstep
   integer          :: Model_Step
   real(r8)         :: Nudge_Hwin_lat0
   real(r8)         :: Nudge_Hwin_latWidth
@@ -534,6 +536,126 @@ contains
   end subroutine ! nudging_readnl
   !================================================================
 
+  !================================================================
+
+   character(len=cl) function interpret_filename_merra( filename_spec, case, &
+   yr_spec, mon_spec, day_spec, hr_spec, sec_spec )
+
+! Create a filename from a filename specifier. The 
+! filename specifyer includes codes for setting things such as the
+! year, month, day, seconds in day, caseid, and tape number. 
+!
+! Interpret filename specifyer string with: 
+!
+!      %c for case, 
+!      %y for year
+!      %m for month
+!      %d for day
+!      %h for modstep
+!      %% for the "%" character
+!
+! If the filename specifyer has spaces " ", they will be trimmed out
+! of the resulting filename.
+
+   ! arguments
+   character(len=*), intent(in)           :: filename_spec   ! Filename specifier to use
+   character(len=*), intent(in), optional :: case            ! Optional casename
+   integer         , intent(in), optional :: yr_spec         ! Simulation year
+   integer         , intent(in), optional :: mon_spec        ! Simulation month
+   integer         , intent(in), optional :: day_spec        ! Simulation day
+   integer         , intent(in), optional :: hr_spec         ! Modstep from replay correction
+   integer         , intent(in), optional :: sec_spec        ! Simulation seconds of day
+
+   ! Local variables
+   integer :: year  ! Simulation year
+   integer :: month ! Simulation month
+   integer :: day   ! Simulation day
+   integer :: ncsec   ! Seconds into current simulation day
+   integer :: modstep ! modstep into current simulation day
+   character(len=cl) :: string    ! Temporary character string 
+   character(len=cl) :: format    ! Format character string 
+   integer :: i, n  ! Loop variables
+   logical :: done
+   !-----------------------------------------------------------------------------
+
+
+   if ( len_trim(filename_spec) == 0 )then
+      call endrun ('INTERPRET_FILENAME_SPEC: filename specifier is empty')
+   end if
+   if ( index(trim(filename_spec)," ") /= 0 )then
+      call endrun ('INTERPRET_FILENAME_SPEC: filename specifier can not contain a space:'//trim(filename_spec))
+   end if
+   !
+   ! Determine year, month, day and sec to put in filename
+   !
+   if (present(yr_spec) .and. present(mon_spec) .and. present(day_spec) .and. present(hr_spec) .and. present(sec_spec)) then
+      year  = yr_spec
+      month = mon_spec
+      day   = day_spec
+      modstep = hr_spec
+      ncsec = sec_spec
+   end if
+   !
+   ! Go through each character in the filename specifyer and interpret if special string
+   !
+   i = 1
+   interpret_filename_merra = ''
+   do while ( i <= len_trim(filename_spec) )
+      !
+      ! If following is an expansion string
+      !
+      if ( filename_spec(i:i) == "%" )then
+         i = i + 1
+         select case( filename_spec(i:i) )
+         case( 'y' )   ! year
+            if ( year > 99999   ) then
+               format = '(i6.6)'
+            else if ( year > 9999    ) then
+               format = '(i5.5)'
+            else
+               format = '(i4.4)'
+            end if
+            write(string,format) year
+         case( 'm' )   ! month
+            write(string,'(i2.2)') month
+         case( 'd' )   ! day
+            write(string,'(i2.2)') day
+         case( 'h' )   ! 3-hour period
+            write(string,'(i1.1)') modstep
+         case( 's' )   ! second
+            write(string,'(i5.5)') ncsec
+         case( '%' )   ! percent character
+            string = "%"
+         case default
+            call endrun ('INTERPRET_FILENAME_SPEC: Invalid expansion character: '//filename_spec(i:i))
+         end select
+         !
+         ! Otherwise take normal text up to the next "%" character
+         !
+      else
+         n = index( filename_spec(i:), "%" )
+         if ( n == 0 ) n = len_trim( filename_spec(i:) ) + 1
+         if ( n == 0 ) exit 
+         string = filename_spec(i:n+i-2)
+         i = n + i - 2
+      end if
+      if ( len_trim(interpret_filename_merra) == 0 )then
+        interpret_filename_merra = trim(string)
+      else
+         if ( (len_trim(interpret_filename_merra)+len_trim(string)) >= cl )then
+            call endrun ('INTERPRET_FILENAME_SPEC: Resultant filename too long')
+         end if
+         interpret_filename_merra = trim(interpret_filename_merra) // trim(string)
+      end if
+      i = i + 1
+
+   end do
+   if ( len_trim(interpret_filename_merra) == 0 )then
+      call endrun ('INTERPRET_FILENAME_SPEC: Resulting filename is empty')
+   end if
+
+end function interpret_filename_merra
+
 
   !================================================================
   subroutine nudging_init
@@ -748,7 +870,7 @@ contains
      ! Initialize number of nudging observation values to keep track of.
      ! Allocate and initialize observation indices 
      !-----------------------------------------------------------------
-     if((Nudge_Force_Opt.ge.0).and.(Nudge_Force_Opt.le.1)) then
+     if((Nudge_Force_Opt.ge.0).and.(Nudge_Force_Opt.le.2)) then
        Nudge_NumObs=2
      else
        ! Additional Options may need OBS values at more times.
@@ -913,11 +1035,20 @@ contains
 
    ! Initialize the analysis filename at the NEXT time for startup.
    !---------------------------------------------------------------
-   Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
-                                       yr_spec=Nudge_Next_Year , &
-                                      mon_spec=Nudge_Next_Month, &
-                                      day_spec=Nudge_Next_Day  , &
-                                      sec_spec=Nudge_Next_Sec    )
+  !  Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
+  !                                      yr_spec=Nudge_Next_Year , &
+  !                                     mon_spec=Nudge_Next_Month, &
+  !                                     day_spec=Nudge_Next_Day  , &
+  !                                     sec_spec=Nudge_Next_Sec    )
+
+   modstep = int(Nudge_Next_Sec/10800)
+   Nudge_File=interpret_filename_merra(Nudge_File_Template      , &
+          yr_spec=Nudge_Next_Year , &
+          mon_spec=Nudge_Next_Month, &
+          day_spec=Nudge_Next_Day  , &
+          hr_spec=modstep, &
+          sec_spec=Nudge_Next_Sec    )
+
    if(masterproc) then
     write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
    endif
@@ -1146,11 +1277,19 @@ contains
 
      ! Set the analysis filename at the NEXT time.
      !---------------------------------------------------------------
-     Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
-                                         yr_spec=Nudge_Next_Year , &
-                                        mon_spec=Nudge_Next_Month, &
-                                        day_spec=Nudge_Next_Day  , &
-                                        sec_spec=Nudge_Next_Sec    )
+    !  Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
+    !                                      yr_spec=Nudge_Next_Year , &
+    !                                     mon_spec=Nudge_Next_Month, &
+    !                                     day_spec=Nudge_Next_Day  , &
+    !                                     sec_spec=Nudge_Next_Sec    )
+     modstep = int(Nudge_Next_Sec/10800)
+     Nudge_File=interpret_filename_merra(Nudge_File_Template      , &
+          yr_spec=Nudge_Next_Year , &
+          mon_spec=Nudge_Next_Month, &
+          day_spec=Nudge_Next_Day  , &
+          hr_spec=modstep, &
+          sec_spec=Nudge_Next_Sec    )
+              
      if(masterproc) then
       write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
      endif
@@ -1178,6 +1317,11 @@ contains
        !---------------------------------------------
        Nudge_ON=Nudge_File_Present(Nudge_ObsInd(1))
      elseif(Nudge_Force_Opt.eq.1) then
+       ! Verify that the CURR and NEXT analyses are available
+       !-----------------------------------------------------
+       Nudge_ON=(Nudge_File_Present(Nudge_ObsInd(1)).and. &
+                 Nudge_File_Present(Nudge_ObsInd(2))      )
+     elseif(Nudge_Force_Opt.eq.2) then
        ! Verify that the CURR and NEXT analyses are available
        !-----------------------------------------------------
        Nudge_ON=(Nudge_File_Present(Nudge_ObsInd(1)).and. &
@@ -1232,6 +1376,23 @@ contains
        DateDiff =Date2-Date1
        call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
        Tfrac= float(DeltaT)/float(Nudge_Step)
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Nudge_ObsInd(1)) &
+                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Nudge_ObsInd(2))
+         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Nudge_ObsInd(1)) &
+                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Nudge_ObsInd(2))
+         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Nudge_ObsInd(1)) &
+                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Nudge_ObsInd(2))
+         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Nudge_ObsInd(1)) &
+                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Nudge_ObsInd(2))
+         Target_PS(:ncol     ,lchnk)=(1._r8-Tfrac)*Nobs_PS(:ncol     ,lchnk,Nudge_ObsInd(1)) &
+                                           +Tfrac *Nobs_PS(:ncol     ,lchnk,Nudge_ObsInd(2))
+       end do
+       elseif(Nudge_Force_Opt.eq.2) then
+       ! Target is midpoint of OBS data CURR<-->NEXT time    
+       !---------------------------------------------------------------
+       Tfrac= 0.5_r8
        do lchnk=begchunk,endchunk
          ncol=phys_state(lchnk)%ncol
          Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Nudge_ObsInd(1)) &

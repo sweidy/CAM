@@ -1140,6 +1140,7 @@ contains
     type(physics_ptend)     :: ptend               ! indivdual parameterization tendencies
     integer  :: nstep                              ! current timestep number
     real(r8) :: zero(pcols)                        ! array of zeros
+    integer  :: log_vert_level                     ! vertical level for outputting to log
     !
     ! If exit condition just return
     !
@@ -1177,6 +1178,7 @@ contains
 
     ! Update Corrector values, if needed
     !----------------------------------
+    log_vert_level = 20
     nstep = get_nstep()
     if(masterproc) then 
       write(iulog,*) 'previous replay location: nstep ', nstep 
@@ -1184,7 +1186,8 @@ contains
     if((Force_Model).and.(Force_ON)) then
       nstep = get_nstep()
       if(masterproc) then 
-      write(iulog,*) "before force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      write(iulog,*) "before force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
+      ! write(iulog,*) "before force: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
       endif
       if (nstep > 0) then 
       do c=begchunk,endchunk
@@ -1198,7 +1201,8 @@ contains
          endif 
       endif
       if(masterproc) then 
-         write(iulog,*) "after force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+         write(iulog,*) "after force: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
+         ! write(iulog,*) "after force: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
       endif
       endif
       ! update analysis and timestep for one step after timestep_tend
@@ -1211,7 +1215,8 @@ contains
       if(Running_mean_ON) then
       nstep = get_nstep()
       if(masterproc) then 
-      write(iulog,*) "before running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+      write(iulog,*) "before running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
+      ! write(iulog,*) "before running nudge: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
       endif
       if (nstep > 0) then 
       do c=begchunk,endchunk
@@ -1221,7 +1226,8 @@ contains
       end do
       endif
       if(masterproc) then 
-         write(iulog,*) "after running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,20)
+         write(iulog,*) "after running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
+         ! write(iulog,*) "after running nudge: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
       endif
       endif
       

@@ -690,6 +690,15 @@
        Default: 500
        </entry>
 
+<entry id="Running_mean_switch_integrate" type="logical" category="running_mean"
+       group="running_mean_nl" valid_values="" >
+       Switch accumulating running mean to integration 
+         TRUE  = coefficient in front of y_m(i) (Running mean value) is 1
+         FALSE = coefficient in front of y_m(i) (Running mean value) is (1 - wrk) 
+       Default: FALSE
+       </entry>
+
+
 <!-- Corrector Parameters -->
 
 <entry id="Force_Model" type="logical" category="corrector"
