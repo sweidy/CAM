@@ -1228,6 +1228,121 @@ contains
    call timemgr_time_ge(YMD1,Model_Next_Sec,            &
                         YMD ,Sec           ,Update_Model)
 
+   !----------------------------------------------------------------
+   ! When past the NEXT time, Update running_mean Arrays and time indices
+   !----------------------------------------------------------------
+   YMD1=(Target_Next_Year*10000) + (Target_Next_Month*100) + Target_Next_Day
+   call timemgr_time_ge(YMD1,Target_Next_Sec,            &
+                        YMD ,Sec           ,Update_Target)
+
+   if((Before_End).and.(Update_Target)) then
+     ! Increment the Running_mean times by the current interval
+     !---------------------------------------------------
+     Target_Curr_Year =Target_Next_Year
+     Target_Curr_Month=Target_Next_Month
+     Target_Curr_Day  =Target_Next_Day
+     Target_Curr_Sec  =Target_Next_Sec
+     YMD1=(Target_Curr_Year*10000) + (Target_Curr_Month*100) + Target_Curr_Day
+     call timemgr_time_inc(YMD1,Target_Curr_Sec,              &
+                           YMD2,Target_Next_Sec,Running_mean_Step,0,0)
+     Target_Next_Year =(YMD2/10000)
+     YMD2            = YMD2-(Target_Next_Year*10000)
+     Target_Next_Month=(YMD2/100)
+     Target_Next_Day  = YMD2-(Target_Next_Month*100)
+
+     ! Set the analysis filename at the NEXT time. (MERRA)
+     !---------------------------------------------------------------
+     modstep=int(Target_Next_Sec / 10800)
+     Target_File=interpret_filename_climo(Target_File_Template      , &
+          mon_spec=Target_Next_Month, &
+          day_spec=Target_Next_Day  , &
+          hr_spec=modstep, &
+          sec_spec=Target_Next_Sec    )
+
+      if(masterproc) then
+        write(iulog,*) trim(Target_Path)//trim(Target_File)
+      endif
+      
+      INQUIRE(FILE=trim(Target_Path)//trim(Target_File), EXIST=Target_File_Present(Running_mean_ObsInd(1)))
+      if (.not. Target_File_Present(Running_mean_ObsInd(1))) print*, 'running_mean target file missing', Target_File
+
+     !----------------------------------------------------------
+   ! Rotate Running_mean_ObsInd() indices for new data, then update 
+   ! the Target observation arrays with analysis data at the 
+   ! NEXT==Running_mean_ObsInd(1) time.
+   !----------------------------------------------------------
+    call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
+
+    ! Now Load the Target values for running_mean tendencies
+     !---------------------------------------------------
+     if(Running_mean_Force_Opt.eq.0) then
+       ! Target is OBS data at NEXT time
+       !----------------------------------
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_V(:ncol,:pver,lchnk)=Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_T(:ncol,:pver,lchnk)=Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+         Target_Q(:ncol,:pver,lchnk)=Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
+       end do
+     elseif(Running_mean_Force_Opt.eq.1) then
+       ! Target is linear interpolation of OBS data CURR<-->NEXT time    
+       !---------------------------------------------------------------
+       call ESMF_TimeSet(Date1,YY=Year,MM=Month,DD=Day,S=Sec)
+       call ESMF_TimeSet(Date2,YY=Target_Next_Year,MM=Target_Next_Month, &
+                               DD=Target_Next_Day , S=Target_Next_Sec    )
+       DateDiff =Date2-Date1
+       call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
+       Tfrac= float(DeltaT)/float(Running_mean_Step)
+
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+       end do
+     elseif(Running_mean_Force_Opt.eq.2) then
+       ! Target is midpoint of OBS data CURR<-->NEXT time    
+       !---------------------------------------------------------------
+       Tfrac= 0.5_r8
+
+       do lchnk=begchunk,endchunk
+         ncol=phys_state(lchnk)%ncol
+         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
+                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
+       end do
+       if (masterproc) then
+        write(iulog,*) 'day, sec, Tfrac, log_vert_level', Target_Curr_Day, Target_Curr_Sec, Tfrac, log_vert_level ! 
+        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
+        write(iulog,*) 'Nobs_U(1,v,1,1) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(1))
+        write(iulog,*) 'Nobs_U(1,v,1,2) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(2))
+       end if
+     else
+       write(iulog,*) 'Running_mean: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
+       call endrun('running_mean_timestep_init:: ERROR unknown Running_mean_Force_Opt')
+     endif
+     ! Now load Dry Static Energy values for Target
+       ! DSE tendencies from Temperature only
+       !---------------------------------------
+      do lchnk=begchunk,endchunk
+        ncol=phys_state(lchnk)%ncol
+        Target_S(:ncol,:pver,lchnk)=cpair*Target_T(:ncol,:pver,lchnk)
+      end do
+
+   endif ! ((Before_End).and.(Update_Target)) then
+
+
    if((Before_End).and.(Update_Model)) then
      ! Increment the Model times by the current interval
      !---------------------------------------------------
@@ -1304,13 +1419,6 @@ contains
         Model_S(:ncol,:pver,lchnk)=cpair*Model_T(:ncol,:pver,lchnk)
       end do
 
-      ! Running_mean_File=interpret_filename_spec(Running_mean_File_Template      , &
-      !                                   yr_spec=Running_mean_Curr_Year, &
-      !                                   mon_spec=Running_mean_Curr_Month, &
-      !                                   day_spec=Running_mean_Curr_Day  , &
-      !                                   sec_spec=Running_mean_Curr_Sec    ) ! Running_mean_Curr_Sec 
-      ! INQUIRE(FILE=trim(Running_mean_Path)//trim(Running_mean_File), EXIST=Running_mean_File_Present)
-    
       ! write model is where the running mean is updated ! 
       call running_mean_write_model_fv(Running_mean_Curr_Month, Running_mean_Curr_Day, Running_mean_Curr_Sec) 
 
@@ -1325,54 +1433,8 @@ contains
 
    endif ! ((Before_End).and.(Update_Model)) then
 
+
    !----------------------------------------------------------------
-   ! When past the NEXT time, Update running_mean Arrays and time indices
-   !----------------------------------------------------------------
-   YMD1=(Target_Next_Year*10000) + (Target_Next_Month*100) + Target_Next_Day
-   call timemgr_time_ge(YMD1,Target_Next_Sec,            &
-                        YMD ,Sec           ,Update_Target)
-
-   if((Before_End).and.(Update_Target)) then
-     ! Increment the Running_mean times by the current interval
-     !---------------------------------------------------
-     Target_Curr_Year =Target_Next_Year
-     Target_Curr_Month=Target_Next_Month
-     Target_Curr_Day  =Target_Next_Day
-     Target_Curr_Sec  =Target_Next_Sec
-     YMD1=(Target_Curr_Year*10000) + (Target_Curr_Month*100) + Target_Curr_Day
-     call timemgr_time_inc(YMD1,Target_Curr_Sec,              &
-                           YMD2,Target_Next_Sec,Running_mean_Step,0,0)
-     Target_Next_Year =(YMD2/10000)
-     YMD2            = YMD2-(Target_Next_Year*10000)
-     Target_Next_Month=(YMD2/100)
-     Target_Next_Day  = YMD2-(Target_Next_Month*100)
-
-     ! Set the analysis filename at the NEXT time. (MERRA)
-     !---------------------------------------------------------------
-     modstep=int(Target_Next_Sec / 10800)
-     Target_File=interpret_filename_climo(Target_File_Template      , &
-          mon_spec=Target_Next_Month, &
-          day_spec=Target_Next_Day  , &
-          hr_spec=modstep, &
-          sec_spec=Target_Next_Sec    )
-
-      if(masterproc) then
-        write(iulog,*) trim(Target_Path)//trim(Target_File)
-      endif
-      
-      INQUIRE(FILE=trim(Target_Path)//trim(Target_File), EXIST=Target_File_Present(Running_mean_ObsInd(1)))
-      if (.not. Target_File_Present(Running_mean_ObsInd(1))) print*, 'running_mean target file missing', Target_File
-
-     !----------------------------------------------------------
-   ! Rotate Running_mean_ObsInd() indices for new data, then update 
-   ! the Target observation arrays with analysis data at the 
-   ! NEXT==Running_mean_ObsInd(1) time.
-   !----------------------------------------------------------
-    call running_mean_update_analyses_fv (trim(Target_Path)//trim(Target_File))
-   endif ! ((Before_End).and.(Update_Target)) then
-
-
-    !----------------------------------------------------------------
    ! Toggle Running_mean nudge flag when the time interval is between 
    ! beginning and ending times, and all of the analyses files exist.
    !----------------------------------------------------------------
@@ -1408,15 +1470,7 @@ contains
    else
      Running_mean_ON=.false.
    endif
-   !----------------------------------------------------------------
-   ! Toggle running_mean flag when the time interval is between 
-   ! beginning and ending times, and all of the analyses files exist.
-   !----------------------------------------------------------------
-  !  if((After_Beg).and.(Before_End)) then
-  !      Running_mean_ON=Target_File_Present
-  !  else
-  !    Running_mean_ON=.false.
-  !  endif
+
 
    if((After_nudge_Beg).and.(Before_End)) then
        Running_mean_nudge_ON=.true.
@@ -1429,72 +1483,6 @@ contains
    !---------------------------------------------------
    if((Before_End).and.((Update_Running_mean).or.(Update_Model).or.(Update_Target))) then
 
-     ! Now Load the Target values for running_mean tendencies
-     !---------------------------------------------------
-     if(Running_mean_Force_Opt.eq.0) then
-       ! Target is OBS data at NEXT time
-       !----------------------------------
-       do lchnk=begchunk,endchunk
-         ncol=phys_state(lchnk)%ncol
-         Target_U(:ncol,:pver,lchnk)=Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
-         Target_V(:ncol,:pver,lchnk)=Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
-         Target_T(:ncol,:pver,lchnk)=Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
-         Target_Q(:ncol,:pver,lchnk)=Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1))
-       end do
-     elseif(Running_mean_Force_Opt.eq.1) then
-       ! Target is linear interpolation of OBS data CURR<-->NEXT time    
-       !---------------------------------------------------------------
-       call ESMF_TimeSet(Date1,YY=Year,MM=Month,DD=Day,S=Sec)
-       call ESMF_TimeSet(Date2,YY=Target_Next_Year,MM=Target_Next_Month, &
-                               DD=Target_Next_Day , S=Target_Next_Sec    )
-       DateDiff =Date2-Date1
-       call ESMF_TimeIntervalGet(DateDiff,S=DeltaT,rc=rc)
-       Tfrac= float(DeltaT)/float(Running_mean_Step)
-
-       do lchnk=begchunk,endchunk
-         ncol=phys_state(lchnk)%ncol
-         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-       end do
-     elseif(Running_mean_Force_Opt.eq.2) then
-       ! Target is midpoint of OBS data CURR<-->NEXT time    
-       !---------------------------------------------------------------
-       Tfrac= 0.5_r8
-
-       do lchnk=begchunk,endchunk
-         ncol=phys_state(lchnk)%ncol
-         Target_U(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_U(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_V(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_V(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_T(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_T(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-         Target_Q(:ncol,:pver,lchnk)=(1._r8-Tfrac)*Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(1)) &
-                                           +Tfrac *Nobs_Q(:ncol,:pver,lchnk,Running_mean_ObsInd(2))
-       end do
-       if (masterproc) then
-        write(iulog,*) 'day, sec, Tfrac, log_vert_level', Target_Curr_Day, Target_Curr_Sec, Tfrac, log_vert_level ! 
-        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
-        write(iulog,*) 'Nobs_U(1,v,1,1) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(1))
-        write(iulog,*) 'Nobs_U(1,v,1,2) = ', Nobs_U(1,log_vert_level,begchunk,Running_mean_ObsInd(2))
-       end if
-     else
-       write(iulog,*) 'Running_mean: Unknown Running_mean_Force_Opt=',Running_mean_Force_Opt
-       call endrun('running_mean_timestep_init:: ERROR unknown Running_mean_Force_Opt')
-     endif
-     ! Now load Dry Static Energy values for Target
-       ! DSE tendencies from Temperature only
-       !---------------------------------------
-      do lchnk=begchunk,endchunk
-        ncol=phys_state(lchnk)%ncol
-        Target_S(:ncol,:pver,lchnk)=cpair*Target_T(:ncol,:pver,lchnk)
-      end do
 
      ! Set Tscale for the specified Forcing Option 
      !-----------------------------------------------
@@ -1597,12 +1585,6 @@ contains
      lchnk=phys_state%lchnk
      ncol =phys_state%ncol
 
-   !   if (masterproc) then
-   !      write(iulog,*) 'running_mean_timestep_tend before save'
-   !      write(iulog,*) 'phys_tend empty?', phys_tend%u(1,20)
-   !      write(iulog,*) 'Running_mean_Ustep', Running_mean_Ustep(1,20,lchnk)
-   !   end if
-
      phys_tend%u(:ncol,:pver)     =Running_mean_Ustep(:ncol,:pver,lchnk)
      phys_tend%v(:ncol,:pver)     =Running_mean_Vstep(:ncol,:pver,lchnk)
      phys_tend%s(:ncol,:pver)     =Running_mean_Sstep(:ncol,:pver,lchnk)
@@ -1612,11 +1594,6 @@ contains
      call outfld( 'Running_nudge_V',phys_tend%v                ,pcols,lchnk)
      call outfld( 'Running_nudge_T',phys_tend%s/cpair          ,pcols,lchnk)
      call outfld( 'Running_nudge_Q',phys_tend%q(1,1,indw)      ,pcols,lchnk)
-
-   !   if (masterproc) then
-   !      write(iulog,*) 'running_mean_timestep_tend after save'
-   !      write(iulog,*) 'phys_tend empty?', phys_tend%u(1,20)
-   !   end if
 
    endif
 
@@ -1662,7 +1639,7 @@ contains
   !================================================================
   subroutine running_mean_write_model_fv(target_month, target_day, target_sec)
    ! 
-   ! running_mean_UPDATE_ANALYSES_FV: 
+   ! running_mean_write_model_fv: 
    !                 Open the given analyses data file, write out in 
    !                 U,V,T,Q, and PS values and after gathering from chunks
    !                 the values to all of the chunks.
@@ -1689,6 +1666,7 @@ contains
 
     if (masterproc) then
         write(iulog,*) 'update running mean: iday_center, ihour', iday_center, ihour
+        write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
      end if
 
     do iw = -half, half
@@ -1707,10 +1685,18 @@ contains
         ncol = get_ncols_p(lchnk)
         do k = 1, pver
         do i = 1, ncol
-            Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
-            Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
-            Climo_T(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_T(i,k,lchnk,iday2,ihour) + wrk*Model_T(i,k,lchnk)
-            Climo_Q(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_Q(i,k,lchnk,iday2,ihour) + wrk*Model_Q(i,k,lchnk)
+            if (Running_mean_switch_integrate) then
+               Climo_U(i,k,lchnk,iday2,ihour) = Climo_U(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_U(i,k,lchnk) - Target_U(i,k,lchnk))
+               Climo_V(i,k,lchnk,iday2,ihour) = Climo_V(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_V(i,k,lchnk) - Target_V(i,k,lchnk))
+               Climo_T(i,k,lchnk,iday2,ihour) = Climo_T(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_T(i,k,lchnk) - Target_T(i,k,lchnk))
+               Climo_Q(i,k,lchnk,iday2,ihour) = Climo_Q(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_Q(i,k,lchnk) - Target_Q(i,k,lchnk))
+            else
+               Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
+               Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
+               Climo_T(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_T(i,k,lchnk,iday2,ihour) + wrk*Model_T(i,k,lchnk)
+               Climo_Q(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_Q(i,k,lchnk,iday2,ihour) + wrk*Model_Q(i,k,lchnk)
+            
+            endif
         end do
         end do
      end do
