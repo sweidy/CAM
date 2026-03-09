@@ -290,9 +290,12 @@ module running_mean
   real(r8)         :: Running_mean_Hwin_max
   real(r8)         :: Running_mean_Hwin_min
   integer          :: Running_mean_win_size
-  integer          :: Running_mean_nstep_max
+  real(r8)         :: Running_mean_nstep_max
   integer          :: log_vert_level
-  logical          :: Running_mean_switch_integrate ! change to integrated running mean
+  logical          :: Running_mean_switch_integrate ! change to integrated running bias
+  real(r8)         :: Running_mean_integrate_coeff ! coefficient in front of xi in integrated running bias
+  integer          :: Running_mean_win_Opt 
+  real(r8), allocatable         :: wwin(:) ! weighting of seasonal window
 
   ! running_mean State Arrays
   !-----------------------
@@ -345,7 +348,7 @@ module running_mean
   real(r8), allocatable :: Climo_V(:,:,:,:,:)
   real(r8), allocatable :: Climo_T(:,:,:,:,:)
   real(r8), allocatable :: Climo_Q(:,:,:,:,:)
-  integer , allocatable :: Running_mean_nstep(:,:) ! (nday, nhour)
+  real(r8) , allocatable :: Running_mean_nstep(:,:) ! (nday, nhour)
 
   real(r8), allocatable :: Lat_array(:) ! nlat
   real(r8), allocatable :: Lon_array(:) ! nlon
@@ -394,7 +397,7 @@ contains
                          Running_mean_Vwin_Ldelta,Running_mean_Vwin_Hdelta,          &
                          Running_mean_Vwin_Invert,                            &
                          Running_mean_win_size, Running_mean_nstep_max,       &
-                         Running_mean_switch_integrate
+                         Running_mean_switch_integrate, Running_mean_integrate_coeff, Running_mean_win_opt
 
    ! running_mean is NOT initialized yet, For now
    ! running_mean will always begin/end at midnight.
@@ -458,6 +461,8 @@ contains
    Running_mean_nstep_max     = 500 ! when to stop accumulating mean
    log_vert_level             = 20
    Running_mean_switch_integrate = .false.
+   Running_mean_integrate_coeff = 0.1 
+   Running_mean_win_Opt       = 0 ! 0 if uniform weights of seasonal window, 1 if tapered by Hann window
 
    ! Read in namelist values
    !------------------------
@@ -604,8 +609,10 @@ contains
    call mpibcast(Running_mean_Vwin_Ldelta  , 1, mpir8 , 0, mpicom)
    call mpibcast(Running_mean_Vwin_Invert,   1, mpilog, 0, mpicom)
    call mpibcast(Running_mean_win_size,      1, mpiint, 0, mpicom)
-   call mpibcast(Running_mean_nstep_max,     1, mpiint, 0, mpicom)
+   call mpibcast(Running_mean_nstep_max,     1, mpir8, 0, mpicom)
    call mpibcast(Running_mean_switch_integrate,     1, mpilog, 0, mpicom)
+   call mpibcast(Running_mean_integrate_coeff,     1, mpir8, 0, mpicom)
+   call mpibcast(Running_mean_win_Opt,     1, mpiint, 0, mpicom)
 #endif
 
    ! End Routine
@@ -645,6 +652,8 @@ contains
    real(r8) Val1_n,Val2_n,Val3_n,Val4_n
    integer  nn
    integer  modstep
+   integer d, half
+   real(r8) sigma
 
    ! Get the time step size
    !------------------------
@@ -714,7 +723,30 @@ contains
    call alloc_err(istat,'running_mean_init','Running_mean_Sstep',pcols*pver*((endchunk-begchunk)+1))
    allocate(Running_mean_Qstep(pcols,pver,begchunk:endchunk),stat=istat)
    call alloc_err(istat,'running_mean_init','Running_mean_Qstep',pcols*pver*((endchunk-begchunk)+1))
-  
+
+   ! allocate space for window weights and assign values based on size / win_opt
+   half = (Running_mean_win_size - 1)/2
+   allocate(wwin(0:half), stat=istat)
+   call alloc_err(istat, 'running_mean_init','wwin',Running_mean_win_size)
+
+   if(Running_mean_win_opt.eq.0) then
+      wwin(:) = 1._r8
+   elseif(Running_mean_win_opt.eq.1) then
+      ! calculate windows based on Hann function
+      do d = 0, half
+         wwin(d) = 0.5_r8 * (1._r8 + cos(acos(-1._r8) * real(d, r8) / (real(half, r8) + 1))) ! stretched so never = 0
+      end do
+   elseif(Running_mean_win_Opt.eq.2) then
+      ! Gaussian with sigma = 10
+      sigma = 5._r8
+      do d = 0, half
+         wwin(d) = exp(-0.5_r8 * (real(d,r8)/sigma)**2)
+      enddo
+   endif
+
+   if(masterproc) then
+      write(iulog,*) 'window weights: ', wwin
+   endif
 
    ! Register output fields with the cam history module
    !-----------------------------------------------------
@@ -891,8 +923,8 @@ contains
      write(iulog,*) 'running_mean: Running_mean_Model=',Running_mean_Model
      write(iulog,*) 'running_mean: Target_Path=',Target_Path
      write(iulog,*) 'running_mean: Target_File_Template =',Target_File_Template
-    !  write(iulog,*) 'running_mean: Running_mean_Path=',Running_mean_Path
-    !  write(iulog,*) 'running_mean: Running_mean_File_Template =',Running_mean_File_Template
+    !  write(iulog,*) 'running_mean: Running_mean_use_climo_restart=',Running_mean_use_climo_restart
+    !  write(iulog,*) 'running_mean: Running_mean_climo_infile =',Running_mean_climo_infile
      write(iulog,*) 'running_mean: Running_mean_Force_Opt=',Running_mean_Force_Opt    
      write(iulog,*) 'running_mean: Running_mean_TimeScale_Opt=',Running_mean_TimeScale_Opt    
      write(iulog,*) 'running_mean: Running_mean_TSmode=',Running_mean_TSmode
@@ -1130,19 +1162,34 @@ contains
    ! Allocate and clear per-slot sample counts
    allocate(Running_mean_nstep(Running_mean_nday,Running_mean_Times_Per_Day),stat=istat)
    call alloc_err(istat,'running_mean_init','Running_mean_nstep',Running_mean_ntime)
-   Running_mean_nstep(:,:) = 0
+   Running_mean_nstep(:,:) = 0._r8
 
    ! -------------------------------------------------------------
    ! Optional restart of climo fields from a previous run
    ! -------------------------------------------------------------
+   ! if (Running_mean_use_climo_restart) then
+   !    if (trim(Running_mean_climo_infile) == ' ') then
+   !       if (masterproc) then
+   !          write(iulog,*) 'running_mean: use_climo_restart = .true. but no infile set; starting from zeros'
+   !       end if
+   !    else
+   !       call running_mean_read_climo_fv(trim(Running_mean_climo_infile))
+   !    end if
+   ! end if
+
    if (Running_mean_use_climo_restart) then
       if (trim(Running_mean_climo_infile) == ' ') then
+
+         ! Construct default filename: running_mean_climo_yyyy-01-01-00000.nc
+         write(Running_mean_climo_infile,'("running_mean_climo_",I4.4,"-01-01-00000.nc")') Year 
+
          if (masterproc) then
-            write(iulog,*) 'running_mean: use_climo_restart = .true. but no infile set; starting from zeros'
+            write(iulog,*) 'running_mean: use_climo_restart = .true. but no infile set;'
+            write(iulog,*) 'using default file: ', trim(Running_mean_climo_infile)
          end if
-      else
-         call running_mean_read_climo_fv(trim(Running_mean_climo_infile))
+
       end if
+      call running_mean_read_climo_fv(trim(Running_mean_climo_infile))
    end if
 
 
@@ -1652,10 +1699,11 @@ contains
     integer, intent(in)       :: target_month, target_day, target_sec
 
     integer :: iday_center, ihour, iday2
-    integer :: iw, half
+    integer :: iw, half, d
     integer :: lchnk, ncol, i, k
-    integer :: nstep_old, nstep_new
-    real(r8):: wrk
+    !integer :: nstep_old, nstep_new
+    real(r8) :: nstep_old, nstep_new
+    real(r8):: wrk, w
 
 
     ! center time slot in climo array
@@ -1667,29 +1715,47 @@ contains
     if (masterproc) then
         write(iulog,*) 'update running mean: iday_center, ihour', iday_center, ihour
         write(iulog,*) 'Target_U(1,v,1) = ', Target_U(1,log_vert_level,begchunk)
-     end if
+    end if
 
     do iw = -half, half
      iday2 = modulo(iday_center - 1 + iw, Running_mean_nday) + 1
 
-     nstep_old = Running_mean_nstep(iday2, ihour)
-     if (nstep_old >= Running_mean_nstep_max) then
-        nstep_new = Running_mean_nstep_max
-     else
-        nstep_new = max(0, nstep_old) + 1
-     end if
-     Running_mean_nstep(iday2, ihour) = nstep_new
-     wrk = 1._r8 / real(nstep_new, r8)
+      nstep_old = Running_mean_nstep(iday2, ihour)
+      
+      
+      if (Running_mean_win_Opt.eq.0) then
+         if (nstep_old >= Running_mean_nstep_max) then
+            nstep_new = Running_mean_nstep_max
+         else
+            nstep_new = max(0._r8, nstep_old) + 1
+         end if
+         Running_mean_nstep(iday2, ihour) = nstep_new
+         wrk = 1._r8 / real(nstep_new, r8)
+      elseif ((Running_mean_win_Opt.eq.1).or.(Running_mean_win_Opt.eq.2)) then
+         d = abs(iw)
+         w = wwin(d)
+         if (nstep_old >= Running_mean_nstep_max) then
+            nstep_new = Running_mean_nstep_max
+         else
+            nstep_new = max(0._r8, nstep_old) + w
+         end if
+         Running_mean_nstep(iday2, ihour) = nstep_new
+         wrk = w / real(nstep_new, r8)
+
+         ! if (masterproc) then
+         !    write(iulog,*) 'iw, d, w, wrk, nstep_new', iw, d, w, wrk, nstep_new
+         ! end if
+      endif
 
      do lchnk = begchunk, endchunk
         ncol = get_ncols_p(lchnk)
         do k = 1, pver
         do i = 1, ncol
             if (Running_mean_switch_integrate) then
-               Climo_U(i,k,lchnk,iday2,ihour) = Climo_U(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_U(i,k,lchnk) - Target_U(i,k,lchnk))
-               Climo_V(i,k,lchnk,iday2,ihour) = Climo_V(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_V(i,k,lchnk) - Target_V(i,k,lchnk))
-               Climo_T(i,k,lchnk,iday2,ihour) = Climo_T(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_T(i,k,lchnk) - Target_T(i,k,lchnk))
-               Climo_Q(i,k,lchnk,iday2,ihour) = Climo_Q(i,k,lchnk,iday2,ihour) + 0.1*wrk*(Model_Q(i,k,lchnk) - Target_Q(i,k,lchnk))
+               Climo_U(i,k,lchnk,iday2,ihour) = Climo_U(i,k,lchnk,iday2,ihour) + Running_mean_integrate_coeff*wrk*(Model_U(i,k,lchnk) - Target_U(i,k,lchnk))
+               Climo_V(i,k,lchnk,iday2,ihour) = Climo_V(i,k,lchnk,iday2,ihour) + Running_mean_integrate_coeff*wrk*(Model_V(i,k,lchnk) - Target_V(i,k,lchnk))
+               Climo_T(i,k,lchnk,iday2,ihour) = Climo_T(i,k,lchnk,iday2,ihour) + Running_mean_integrate_coeff*wrk*(Model_T(i,k,lchnk) - Target_T(i,k,lchnk))
+               Climo_Q(i,k,lchnk,iday2,ihour) = Climo_Q(i,k,lchnk,iday2,ihour) + Running_mean_integrate_coeff*wrk*(Model_Q(i,k,lchnk) - Target_Q(i,k,lchnk))
             else
                Climo_U(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_U(i,k,lchnk,iday2,ihour) + wrk*Model_U(i,k,lchnk)
                Climo_V(i,k,lchnk,iday2,ihour) = (1._r8-wrk)*Climo_V(i,k,lchnk,iday2,ihour) + wrk*Model_V(i,k,lchnk)
@@ -2079,7 +2145,7 @@ contains
    endif
 
    ! Running_mean_nstep(day,hour)
-   istat = nf90_def_var(ncid, 'Running_mean_nstep', nf90_int, &
+   istat = nf90_def_var(ncid, 'Running_mean_nstep', nf90_double, &
                         (/dim_day, dim_hour/), var_nstep)
    if (istat /= NF90_NOERR) then
       write(iulog,*) nf90_strerror(istat)
@@ -2422,7 +2488,7 @@ contains
 #ifdef SPMD
    ! Broadcast nstep to all tasks
    call mpibcast(Running_mean_nstep, Running_mean_nday*Running_mean_Times_Per_Day, &
-                 mpiint, 0, mpicom)
+                 mpir8, 0, mpicom)
 #endif
 
    ! Now loop over day/hour and read climo fields, scatter to chunks
