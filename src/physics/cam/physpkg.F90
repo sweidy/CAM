@@ -1240,9 +1240,9 @@ contains
     endif
 
    ! for tphysac, so turn this back on if doing full column
-   !  if (ConvStateSwap_Model) then 
-   !    call update_conv_state_swap_profile (phys_state)
-   !  endif
+    if (ConvStateSwap_Model) then 
+      call update_conv_state_swap_profile (phys_state)
+    endif
 
     do c=begchunk,endchunk
        ncol = get_ncols_p(c)
@@ -1496,21 +1496,21 @@ contains
     call t_stopf('tphysac_init')
 
 
-   !  ! swap state before tphysac
-   !  if (nstep > 1) then 
-   !  if (ConvStateSwap_Model) then
+    ! swap state before tphysac
+    if (nstep > 1) then 
+    if (ConvStateSwap_Model) then
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "before swap in tphysac: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
+      if(masterproc) then 
+         write(iulog,*) "before swap in tphysac: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
 
-   !    call conv_state_swap_in(ztodt, state,tend)
+      call conv_state_swap_in(ztodt, state,tend)
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "after swap in: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
-   !  endif
-   !  endif
+      if(masterproc) then 
+         write(iulog,*) "after swap in: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
+    endif
+    endif
     !===================================================
     ! Source/sink terms for advected tracers.
     !===================================================
@@ -1659,22 +1659,22 @@ contains
 
     call t_stopf  ( 'iondrag' )
 
-   !  ! swap state after tphysac
-   ! if (nstep > 1) then 
-   ! if (ConvStateSwap_Model) then
+    ! swap state after tphysac
+   if (nstep > 1) then 
+   if (ConvStateSwap_Model) then
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "before swap out: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
+      if(masterproc) then 
+         write(iulog,*) "before swap out: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
 
-   !    call conv_state_swap_out(ztodt, state,tend)
+      call conv_state_swap_out(ztodt, state,tend)
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "after swap out: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
+      if(masterproc) then 
+         write(iulog,*) "after swap out: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
     
-   ! endif 
-   ! endif
+   endif 
+   endif
 
     ! Update Nudging values, if needed
     !----------------------------------
@@ -2044,38 +2044,6 @@ contains
 
     call t_stopf('energy_fixer')
 
-   !  ! swap state before convection scheme
-   !  if (nstep > 1) then 
-   !  if (ConvStateSwap_Model) then
-
-   !    if(masterproc) then 
-   !       write(iulog,*) "before swap in tphysbc: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
-
-   !    call conv_state_swap_in(ztodt, state,tend)
-
-   !    if(masterproc) then 
-   !       write(iulog,*) "after swap in: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
-    
-   !  endif
-   ! endif
-    !
-    !===================================================
-    ! Dry adjustment
-    !===================================================
-    call t_startf('dry_adjustment')
-
-    call dadadj_tend(ztodt, state, ptend)
-
-    call physics_update(state, ptend, ztodt, tend)
-
-    call t_stopf('dry_adjustment')
-
-    !===================================================
-    ! Moist convection
-    !===================================================
-
     ! swap state before convection scheme
     if (nstep > 1) then 
     if (ConvStateSwap_Model) then
@@ -2092,7 +2060,21 @@ contains
     
     endif
    endif
+    !
+    !===================================================
+    ! Dry adjustment
+    !===================================================
+    call t_startf('dry_adjustment')
 
+    call dadadj_tend(ztodt, state, ptend)
+
+    call physics_update(state, ptend, ztodt, tend)
+
+    call t_stopf('dry_adjustment')
+
+    !===================================================
+    ! Moist convection
+    !===================================================
     call t_startf('moist_convection')
 
     call t_startf ('convect_deep_tend')
@@ -2424,22 +2406,6 @@ contains
 
    endif
 
-   ! swap state after convection scheme
-   if (nstep > 1) then 
-   if (ConvStateSwap_Model) then
-
-      if(masterproc) then 
-         write(iulog,*) "before swap out: phys_state%u: ", state%q(1,log_vert_level,indw)
-      endif
-
-      call conv_state_swap_out(ztodt, state,tend)
-
-      if(masterproc) then 
-         write(iulog,*) "after swap out: phys_state%u: ", state%q(1,log_vert_level, indw)
-      endif
-    
-    endif 
-   endif
 
     !===================================================
     ! Moist physical parameteriztions complete:
@@ -2480,22 +2446,22 @@ contains
 
     call t_stopf('radiation')
 
-   ! ! swap state after convection scheme
-   ! if (nstep > 1) then 
-   ! if (ConvStateSwap_Model) then
+   ! swap state after convection scheme
+   if (nstep > 1) then 
+   if (ConvStateSwap_Model) then
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "before swap out: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
+      if(masterproc) then 
+         write(iulog,*) "before swap out: phys_state%q: ", state%q(1,log_vert_level,indw)
+      endif
 
-   !    call conv_state_swap_out(ztodt, state,tend)
+      call conv_state_swap_out(ztodt, state,tend)
 
-   !    if(masterproc) then 
-   !       write(iulog,*) "after swap out: phys_state%u: ", state%u(1,log_vert_level)
-   !    endif
+      if(masterproc) then 
+         write(iulog,*) "after swap out: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
     
-   !  endif 
-   ! endif
+    endif 
+   endif
 
     ! Diagnose the location of the tropopause and its location to the history file(s).
     call t_startf('tropopause')
