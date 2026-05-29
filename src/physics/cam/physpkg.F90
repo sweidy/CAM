@@ -360,7 +360,7 @@ contains
     real(r8), pointer :: qpert(:,:)
 
     character(len=11) :: subname='phys_inidat' ! subroutine name
-    integer :: tpert_idx, qpert_idx, pblh_idx
+    integer :: tpert_idx, qpert_idx, pblh_idx 
 
     logical :: found=.false., found2=.false.
     integer :: ierr
@@ -1051,6 +1051,10 @@ contains
 
     call phys_getopts( use_spcam_out = use_spcam)
 
+    if (ConvStateSwap_Model) then
+      call update_conv_state_swap_profile (phys_state)
+    endif
+
 !$OMP PARALLEL DO PRIVATE (C, phys_buffer_chunk)
     do c=begchunk, endchunk
       !
@@ -1063,9 +1067,6 @@ contains
       call t_stopf ('diag_physvar_ic')
 
       if (use_spcam) then
-         if (ConvStateSwap_Model) then
-            call update_conv_state_swap_profile (ztodt, phys_state)
-         endif
 
         call tphysbc_spcam (ztodt, phys_state(c),     &
              phys_tend(c), phys_buffer_chunk, &
@@ -1113,6 +1114,7 @@ contains
     use time_manager,       only: get_nstep
     use corrector,          only: Force_Model,Force_ON, corrector_timestep_tend,corrector_timestep_init
     use running_mean,       only: Running_mean_Model,Running_mean_ON, Running_mean_nudge_ON,running_mean_timestep_tend, running_mean_timestep_init
+    use conv_state_swap,    only: update_conv_state_swap_profile,ConvStateSwap_Model 
     use check_energy,       only: check_energy_chng 
 #if ( defined OFFLINE_DYN )
     use metdata,         only: get_met_srf2
@@ -1140,10 +1142,13 @@ contains
     type(physics_ptend)     :: ptend               ! indivdual parameterization tendencies
     integer  :: nstep                              ! current timestep number
     real(r8) :: zero(pcols)                        ! array of zeros
-    integer  :: log_vert_level                     ! vertical level for outputting to log
+    integer  :: log_vert_level, indw                     ! vertical level for outputting to log
     !
     ! If exit condition just return
     !
+
+    zero = 0._r8
+    call cnst_get_ind('Q',indw)
 
     if(single_column.and.scm_crm_mode) then
        call diag_deallocate()
@@ -1215,8 +1220,8 @@ contains
       if(Running_mean_ON) then
       nstep = get_nstep()
       if(masterproc) then 
-      write(iulog,*) "before running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
-      ! write(iulog,*) "before running nudge: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
+         write(iulog,*) "before running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
+         write(iulog,*) "before running nudge: phys_state(begchunk)%q: ", phys_state(begchunk)%q(1,log_vert_level, indw)
       endif
       if (nstep > 0) then 
       do c=begchunk,endchunk
@@ -1227,12 +1232,17 @@ contains
       endif
       if(masterproc) then 
          write(iulog,*) "after running nudge: phys_state(begchunk)%u: ", phys_state(begchunk)%u(1,log_vert_level)
-         ! write(iulog,*) "after running nudge: phys_tend(begchunk)%dudt: ", phys_tend(begchunk)%dudt(1,20)
+         write(iulog,*) "after running nudge: phys_state(begchunk)%q: ", phys_state(begchunk)%q(1,log_vert_level, indw)
       endif
       endif
       
       call running_mean_timestep_init(phys_state)
     endif
+
+   ! for tphysac, so turn this back on if doing full column
+   !  if (ConvStateSwap_Model) then 
+   !    call update_conv_state_swap_profile (phys_state)
+   !  endif
 
     do c=begchunk,endchunk
        ncol = get_ncols_p(c)
@@ -1356,6 +1366,9 @@ contains
     use qneg_module,        only: qneg4
     use co2_cycle,          only: co2_cycle_set_ptend
     use nudging,            only: Nudge_Model,Nudge_ON,nudging_timestep_tend
+    use conv_state_swap,    only: ConvStateSwap_Model, conv_state_swap_in,conv_state_swap_out
+    use corrector,          only: Force_Model,Force_ON,corrector_timestep_tend
+    use running_mean,       only: Running_mean_Model,Running_mean_ON,running_mean_timestep_tend
 
     !
     ! Arguments
@@ -1410,11 +1423,17 @@ contains
     real(r8), pointer, dimension(:,:) :: dtcore
     real(r8), pointer, dimension(:,:) :: ast     ! relative humidity cloud fraction
 
+    integer  :: log_vert_level                     ! vertical level for outputting to log
+    integer indw
+
     !-----------------------------------------------------------------------
     lchnk = state%lchnk
     ncol  = state%ncol
 
     nstep = get_nstep()
+    call cnst_get_ind('Q',indw)
+
+    log_vert_level=20
 
     ! Adjust the surface fluxes to reduce instabilities in near sfc layer
     if (phys_do_flux_avg()) then
@@ -1475,6 +1494,23 @@ contains
          cam_in%shf, cam_in%lhf, cam_in%cflx)
 
     call t_stopf('tphysac_init')
+
+
+   !  ! swap state before tphysac
+   !  if (nstep > 1) then 
+   !  if (ConvStateSwap_Model) then
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "before swap in tphysac: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+
+   !    call conv_state_swap_in(ztodt, state,tend)
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "after swap in: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+   !  endif
+   !  endif
     !===================================================
     ! Source/sink terms for advected tracers.
     !===================================================
@@ -1622,6 +1658,23 @@ contains
     call check_energy_chng(state, tend, "iondrag", nstep, ztodt, zero, zero, zero, zero)
 
     call t_stopf  ( 'iondrag' )
+
+   !  ! swap state after tphysac
+   ! if (nstep > 1) then 
+   ! if (ConvStateSwap_Model) then
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "before swap out: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+
+   !    call conv_state_swap_out(ztodt, state,tend)
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "after swap out: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+    
+   ! endif 
+   ! endif
 
     ! Update Nudging values, if needed
     !----------------------------------
@@ -1785,6 +1838,10 @@ contains
     use subcol,          only: subcol_gen, subcol_ptend_avg
     use subcol_utils,    only: subcol_ptend_copy, is_subcol_on
     use qneg_module,     only: qneg3
+    use conv_state_swap, only: ConvStateSwap_Model, conv_state_swap_in,conv_state_swap_out
+    use corrector,       only: Force_Model,Force_ON,corrector_timestep_tend
+    use running_mean,    only: Running_mean_Model,Running_mean_ON,running_mean_timestep_tend
+
 
     ! Arguments
 
@@ -1886,6 +1943,8 @@ contains
     real(r8) :: zero_tracers(pcols,pcnst)
 
     logical   :: lq(pcnst)
+    integer  :: log_vert_level                     ! vertical level for outputting to log
+    integer indw
     !-----------------------------------------------------------------------
 
     call t_startf('bc_init')
@@ -1898,6 +1957,9 @@ contains
     ncol  = state%ncol
 
     nstep = get_nstep()
+    call cnst_get_ind('Q',indw)
+    log_vert_level = 20
+
 
     ! Associate pointers with physics buffer fields
     itim_old = pbuf_old_tim_idx()
@@ -1981,6 +2043,23 @@ contains
     end if
 
     call t_stopf('energy_fixer')
+
+   !  ! swap state before convection scheme
+   !  if (nstep > 1) then 
+   !  if (ConvStateSwap_Model) then
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "before swap in tphysbc: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+
+   !    call conv_state_swap_in(ztodt, state,tend)
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "after swap in: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+    
+   !  endif
+   ! endif
     !
     !===================================================
     ! Dry adjustment
@@ -1996,6 +2075,24 @@ contains
     !===================================================
     ! Moist convection
     !===================================================
+
+    ! swap state before convection scheme
+    if (nstep > 1) then 
+    if (ConvStateSwap_Model) then
+
+      if(masterproc) then 
+         write(iulog,*) "before swap in tphysbc: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
+
+      call conv_state_swap_in(ztodt, state,tend)
+
+      if(masterproc) then 
+         write(iulog,*) "after swap in: phys_state%q: ", state%q(1,log_vert_level, indw)
+      endif
+    
+    endif
+   endif
+
     call t_startf('moist_convection')
 
     call t_startf ('convect_deep_tend')
@@ -2327,6 +2424,23 @@ contains
 
    endif
 
+   ! swap state after convection scheme
+   if (nstep > 1) then 
+   if (ConvStateSwap_Model) then
+
+      if(masterproc) then 
+         write(iulog,*) "before swap out: phys_state%u: ", state%q(1,log_vert_level,indw)
+      endif
+
+      call conv_state_swap_out(ztodt, state,tend)
+
+      if(masterproc) then 
+         write(iulog,*) "after swap out: phys_state%u: ", state%q(1,log_vert_level, indw)
+      endif
+    
+    endif 
+   endif
+
     !===================================================
     ! Moist physical parameteriztions complete:
     ! send dynamical variables, and derived variables to history file
@@ -2365,6 +2479,23 @@ contains
     call check_energy_chng(state, tend, "radheat", nstep, ztodt, zero, zero, zero, net_flx)
 
     call t_stopf('radiation')
+
+   ! ! swap state after convection scheme
+   ! if (nstep > 1) then 
+   ! if (ConvStateSwap_Model) then
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "before swap out: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+
+   !    call conv_state_swap_out(ztodt, state,tend)
+
+   !    if(masterproc) then 
+   !       write(iulog,*) "after swap out: phys_state%u: ", state%u(1,log_vert_level)
+   !    endif
+    
+   !  endif 
+   ! endif
 
     ! Diagnose the location of the tropopause and its location to the history file(s).
     call t_startf('tropopause')

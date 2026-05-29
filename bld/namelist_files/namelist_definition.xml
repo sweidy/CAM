@@ -988,6 +988,15 @@
        Default: FALSE
        </entry>
 
+<entry id="ConvStateSwap_use_forcing_opt" type="integer" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Toggle whether to read state swap from file (0) or to use the forcing from 
+       the running mean or the corrector tendency functions themselves (1) or to use 
+       a combination of both, where the swap is taken as the difference between the 
+       running mean and the control climatology.
+       Default: 0
+       </entry>
+
 <entry id="ConvStateSwap_Path" type="char*256" input_pathname="abs" category="conv_state_swap"
        group="conv_state_swap_nl" valid_values="" >
        Full pathname of analyses data to use for conv_state_swap.
@@ -1014,6 +1023,52 @@
          [0.,86400.] Step size of convective state files in seconds.
          Controls how often a new state file is read.
        Default: 21600.
+       </entry>
+
+<entry id="ConvStateSwap_Ucoef" type="real" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Normalized Coeffcient for U nudging.
+         [0.,1.] fraction of nudging tendency applied.
+       Default: 0.
+       </entry>
+
+<entry id="ConvStateSwap_Vcoef" type="real" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Normalized Coeffcient for U nudging.
+         [0.,1.] fraction of nudging tendency applied.
+       Default: 0.
+       </entry>
+
+<entry id="ConvStateSwap_Tcoef" type="real" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Normalized Coeffcient for U nudging.
+         [0.,1.] fraction of nudging tendency applied.
+       Default: 0.
+       </entry>
+
+<entry id="ConvStateSwap_Qcoef" type="real" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Normalized Coeffcient for U nudging.
+         [0.,1.] fraction of nudging tendency applied.
+       Default: 0.
+       </entry>
+
+<entry id="ConvStateSwap_Beg_Year" type="integer" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Year at which corrector Begins.
+       Default: none
+       </entry>
+
+<entry id="ConvStateSwap_Beg_Month" type="integer" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Month at which corrector Begins.
+       Default: none
+       </entry>
+
+<entry id="ConvStateSwap_Beg_Day" type="integer" category="conv_state_swap"
+       group="conv_state_swap_nl" valid_values="" >
+       Day at which corrector Begins.
+       Default: none
        </entry>
 
 <!-- Aerosols: Data (CAM version) -->

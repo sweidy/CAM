@@ -39,15 +39,26 @@ module conv_state_swap
   public:: conv_state_swap_out ! subtract bias to state
   public:: read_netcdf_conv_state_swap ! read convective state file
   public:: ConvStateSwap_Model ! for if statements outside of module
+  ! 0 for tendency only from file, 1 for tendency from forcing only, 2 from difference from forcing to file
+  public:: ConvStateSwap_use_forcing_opt
+  public:: ConvStateSwap_tau
 
   ! Conv state swap parameters
   logical          :: ConvStateSwap_Model       =.false.
+  integer          :: ConvStateSwap_use_forcing_opt
   character(len=cl):: ConvStateSwap_Path
   character(len=cs):: ConvStateSwap_File,ConvStateSwap_File_Template
   real(r8)         :: ConvStateSwap_tau
   integer          :: ConvStateSwap_Next_Year,ConvStateSwap_Next_Month
   integer          :: ConvStateSwap_Next_Day ,ConvStateSwap_Next_Sec
   integer          :: ConvStateSwap_Step
+  real(r8)         :: ConvStateSwap_Ucoef
+  real(r8)         :: ConvStateSwap_Vcoef
+  real(r8)         :: ConvStateSwap_Qcoef
+  real(r8)         :: ConvStateSwap_Tcoef
+  integer          :: ConvStateSwap_Beg_Year ,ConvStateSwap_Beg_Month
+  integer          :: ConvStateSwap_Beg_Day  ,ConvStateSwap_Beg_Sec
+
 
   logical :: ConvStateSwap_File_Present
   logical :: ConvStateSwap_Initialized =.false.
@@ -80,15 +91,27 @@ contains
 
    namelist /conv_state_swap_nl/ ConvStateSwap_Model,ConvStateSwap_Path,                       &
                          ConvStateSwap_File_Template, ConvStateSwap_tau,                       &
-                         ConvStateSwap_Step
+                         ConvStateSwap_Step,ConvStateSwap_use_forcing_opt,                     &
+                         ConvStateSwap_Ucoef, ConvStateSwap_Vcoef, ConvStateSwap_Qcoef,        &
+                         ConvStateSwap_Tcoef, ConvStateSwap_Beg_Year, ConvStateSwap_Beg_Month, &
+                         ConvStateSwap_Beg_Day
 
    ! Set Default Namelist values
    !-----------------------------
    ConvStateSwap_Model         = .false.
+   ConvStateSwap_use_forcing_opt = 0
    ConvStateSwap_Path          = '/n/holylfs06/LABS/kuang_lab/Lab/sweidman/IC_CESM2/'
    ConvStateSwap_File_Template = 'spcam_replay_uvtq.%m-%d-%s.nc'
-   ConvStateSwap_tau           = 1800._r8 ! 30 minute forcing timescale
+   ConvStateSwap_tau           = 21600._r8 ! 30 minute forcing timescale
    ConvStateSwap_Step          = 21600._r8 ! read every 6 hrs
+   ConvStateSwap_Ucoef         = 1._r8
+   ConvStateSwap_Vcoef         = 1._r8
+   ConvStateSwap_Qcoef         = 1._r8
+   ConvStateSwap_Tcoef         = 1._r8
+   ConvStateSwap_Beg_Year      = 1980
+   ConvStateSwap_Beg_Month     = 1
+   ConvStateSwap_Beg_Day       = 1
+   ConvStateSwap_Beg_Sec       = 0
 
    ! Read in namelist values
    !------------------------
@@ -112,8 +135,17 @@ contains
    call mpibcast(ConvStateSwap_Path         ,len(ConvStateSwap_Path)         ,mpichar,0,mpicom)
    call mpibcast(ConvStateSwap_File_Template,len(ConvStateSwap_File_Template),mpichar,0,mpicom)
    call mpibcast(ConvStateSwap_Model        , 1, mpilog, 0, mpicom)
+   call mpibcast(ConvStateSwap_use_forcing_opt        , 1, mpiint, 0, mpicom)
    call mpibcast(ConvStateSwap_tau          , 1, mpir8 , 0, mpicom)
    call mpibcast(ConvStateSwap_Step          , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Ucoef        , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vcoef        , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Tcoef        , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Qcoef        , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Beg_Year     , 1, mpiint, 0, mpicom)
+   call mpibcast(ConvStateSwap_Beg_Month    , 1, mpiint, 0, mpicom)
+   call mpibcast(ConvStateSwap_Beg_Day      , 1, mpiint, 0, mpicom)
+   call mpibcast(ConvStateSwap_Beg_Sec      , 1, mpiint, 0, mpicom)
 #endif
 
    ! End Routine
@@ -141,6 +173,7 @@ contains
     !----------------
     integer  Year,Month,Day,Sec, Beg_Sec
     integer  YMD1,YMD
+    logical  After_Beg
     integer  istat,lchnk,ncol,icol,ilev
     integer  hdim1_d,hdim2_d
     integer  dtime
@@ -172,16 +205,28 @@ contains
       ConvStateSwap_nlat=hdim2_d
       ConvStateSwap_nlev=pver
 
+      ! Check the time relative to the corrector window
+      !------------------------------------------------
       call get_curr_date(Year,Month,Day,Sec)
       YMD=(Year*10000) + (Month*100) + Day
+      YMD1=(ConvStateSwap_Beg_Year*10000) + (ConvStateSwap_Beg_Month*100) + ConvStateSwap_Beg_Day
+      call timemgr_time_ge(YMD1,ConvStateSwap_Beg_Sec,         &
+                            YMD ,Sec          ,After_Beg)
 
       ! Set Time indicies so that the next call to 
       ! timestep_init will initialize the data arrays.
       !--------------------------------------------
-      ConvStateSwap_Next_Year =Year
-      ConvStateSwap_Next_Month=Month
-      ConvStateSwap_Next_Day  =Day
-      ConvStateSwap_Next_Sec  =(Sec/ConvStateSwap_Step)*ConvStateSwap_Step
+      if (After_Beg) then
+        ConvStateSwap_Next_Year =Year
+        ConvStateSwap_Next_Month=Month
+        ConvStateSwap_Next_Day  =Day
+        ConvStateSwap_Next_Sec  =(Sec/ConvStateSwap_Step)*ConvStateSwap_Step
+      else
+        ConvStateSwap_Next_Year =ConvStateSwap_Beg_Year
+        ConvStateSwap_Next_Month=ConvStateSwap_Beg_Month
+        ConvStateSwap_Next_Day  =ConvStateSwap_Beg_Day
+        ConvStateSwap_Next_Sec  =ConvStateSwap_Beg_Sec
+      endif
 
       ConvStateSwap_File_Present=.false.
 
@@ -202,12 +247,20 @@ contains
       write(iulog,*) '  MODEL ConvStateSwap INITIALIZED WITH THE FOLLOWING SETTINGS: '
       write(iulog,*) '---------------------------------------------------------'
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Model=',ConvStateSwap_Model
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_use_forcing_opt=',ConvStateSwap_use_forcing_opt
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Path=',ConvStateSwap_Path
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_File_Template =',ConvStateSwap_File_Template
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_tau  =',ConvStateSwap_tau
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Step  =',ConvStateSwap_Step
-
-    end if ! masterproc
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Ucoef  =',ConvStateSwap_Ucoef
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vcoef  =',ConvStateSwap_Vcoef
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Qcoef  =',ConvStateSwap_Qcoef
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Tcoef  =',ConvStateSwap_Tcoef
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Year  =',ConvStateSwap_Beg_Year
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Month  =',ConvStateSwap_Beg_Month
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Day  =',ConvStateSwap_Beg_Day
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Sec  =',ConvStateSwap_Beg_Sec
+end if ! masterproc
 
 #ifdef SPMD
     call mpibcast(ConvStateSwap_Step          ,            1, mpir8 , 0, mpicom)
@@ -216,6 +269,7 @@ contains
     call mpibcast(ConvStateSwap_Next_Day      ,            1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_Next_Sec      ,            1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_Model         ,            1, mpilog, 0, mpicom)
+    call mpibcast(ConvStateSwap_use_forcing_opt         ,  1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_Initialized   ,            1, mpilog, 0, mpicom)
     call mpibcast(ConvStateSwap_nlev          ,            1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_nlon          ,            1, mpiint, 0, mpicom)
@@ -224,17 +278,20 @@ contains
 
     ! Initialize the analysis filename at the NEXT time for startup.
       !---------------------------------------------------------------
-    ConvStateSwap_File=interpret_filename_spec(ConvStateSwap_File_Template      , &
-                                      yr_spec=Year , &
-                                      mon_spec=Month, &
-                                      day_spec=Day  , &
-                                      sec_spec=Beg_Sec    )
 
-    if(masterproc) then
-    write(iulog,*) 'ConvStateSwap: Reading forcing:',trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+    if ((ConvStateSwap_use_forcing_opt.eq.0).or.(ConvStateSwap_use_forcing_opt.eq.2)) then
+      ConvStateSwap_File=interpret_filename_spec(ConvStateSwap_File_Template      , &
+                                        yr_spec=Year , &
+                                        mon_spec=Month, &
+                                        day_spec=Day  , &
+                                        sec_spec=Beg_Sec    )
+
+      if(masterproc) then
+      write(iulog,*) 'ConvStateSwap: Reading forcing:',trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+      endif
+
+      call read_netcdf_conv_state_swap (trim(ConvStateSwap_Path)//trim(ConvStateSwap_File))
     endif
-
-    call read_netcdf_conv_state_swap (trim(ConvStateSwap_Path)//trim(ConvStateSwap_File))
 
     ! Load zeros into arrays
     !------------------------------------------------------
@@ -456,50 +513,69 @@ contains
    end subroutine read_netcdf_conv_state_swap
 
 
-   subroutine update_conv_state_swap_profile (ztodt, state)
+   subroutine update_conv_state_swap_profile (state)
 
   !----------------------------------------------------------------------- 
   ! Purpose: 
   !-----------------------------------------------------------------------
    use physics_buffer, only : pbuf_get_index, dtype_r8
+   use physconst,    only: cpair
    use dyn_grid,     only: get_horiz_grid_dim_d
    use time_manager, only: get_nstep, get_curr_date
    use filenames     ,only: interpret_filename_spec
+   use constituents,       only: cnst_get_ind
+   use corrector,       only: Force_Model,Force_ON,corrector_timestep_tend
+   use running_mean,    only: Running_mean_Model,Running_mean_ON,running_mean_timestep_tend,Running_nudge_U,Running_nudge_V,Running_nudge_T,Running_nudge_Q
+   use physics_types,   only: physics_ptend_reset
    
    integer, save :: nstep_count
 
   ! Arguments
-   real(r8) , intent(in) :: ztodt   
    type(physics_state), intent(inout) :: state(begchunk:endchunk)
 
   ! Local workspace
+   type(physics_ptend)   :: ptend(begchunk:endchunk)                  ! indivdual parameterization tendencies
+
    integer :: i, j,n ,ilat                 ! longitude, latitude,field, and global column indices
    integer :: c, ncols, k, istep
    real(r8) ::rlat(pcols),conv_forcingtime!,tmprand(128,64)
    integer :: ilat_all(pcols)
-   integer :: ndays, Day, Month, Year, ncsec, dtime
+   integer :: ndays, Day, Month, Year, ncsec, dtime, Sec
    integer YMD1,YMD2,YMD
+   logical After_Beg
    integer :: modstep6hr
    logical :: Update_ConvState
    logical :: fileexists
-   logical,save :: conv_started  
-   integer :: ierr,csize                           
+   logical,save :: conv_started = .false. 
+   integer :: ierr,csize     
+   integer :: indw                      
   !-----
       
    real(r8), allocatable :: tmpfield_conv(:)
 
    istep=get_nstep()
    nstep_count=istep
+   call cnst_get_ind('Q',indw)
+
+   ! Get Current time
+   !--------------------
+   call get_curr_date(Year,Month,Day,Sec)
+   YMD=(Year*10000) + (Month*100) + Day
+
+   !-------------------------------------------------------
+   ! Determine if the current time is AFTER the begining time
+   ! and if it is BEFORE the ending time.
+   !-------------------------------------------------------
+   YMD1=(ConvStateSwap_Beg_Year*10000) + (ConvStateSwap_Beg_Month*100) + ConvStateSwap_Beg_Day
+   call timemgr_time_ge(YMD1,ConvStateSwap_Beg_Sec,         &
+                        YMD ,Sec          ,After_Beg)
 
    ! allocate state forcing
    if (conv_started .ne. .TRUE.) then
       conv_started=.TRUE.
       
-      #if ( defined SPMD )
+#if ( defined SPMD )
           do c = begchunk, endchunk
-              call get_rlat_all_p(c,pcols,rlat)
-              call get_lat_all_p(c,pcols,ilat_all)
-              rlat=rlat*180._r8/3.14159
               ncols = get_ncols_p(c)
               do i = 1, ncols
                   do k=1,pver
@@ -510,67 +586,210 @@ contains
                   end do
               end do
           end do
-          #endif
+#endif
     endif
 
-    ! determine whether time to update convection state file
-    call get_curr_date(Year,Month,Day,ncsec)
-    YMD=(Year*10000) + (Month*100) + Day
-    YMD1=(ConvStateSwap_Next_Year*10000) + (ConvStateSwap_Next_Month*100) + ConvStateSwap_Next_Day
-    call timemgr_time_ge(YMD1,ConvStateSwap_Next_Sec,            &
-                        YMD ,ncsec           ,Update_ConvState)
+    if (After_Beg) then
 
-    ! if time to read
-    if (Update_ConvState) then
+    if (ConvStateSwap_use_forcing_opt.eq.0) then
 
-      if (masterproc) print*, 'time to update convection bias file'
-      if (masterproc) write(iulog,*) "ncsec, next sec", ncsec,ConvStateSwap_Next_Sec 
+      ! determine whether time to update convection state file
+      call get_curr_date(Year,Month,Day,ncsec)
+      YMD=(Year*10000) + (Month*100) + Day
+      YMD1=(ConvStateSwap_Next_Year*10000) + (ConvStateSwap_Next_Month*100) + ConvStateSwap_Next_Day
+      call timemgr_time_ge(YMD1,ConvStateSwap_Next_Sec,            &
+                          YMD ,ncsec           ,Update_ConvState)
 
-      fileexists=.FALSE.
-    
-      ! check if file exists and if so, read in
-      ConvStateSwap_File=interpret_filename_spec(ConvStateSwap_File_Template      , &
-            yr_spec=ConvStateSwap_Next_Year , &
-            mon_spec=ConvStateSwap_Next_Month, &
-            day_spec=ConvStateSwap_Next_Day  , &
-            sec_spec=ConvStateSwap_Next_Sec    )
+      ! if time to read
+      if (Update_ConvState) then
+
+        if (masterproc) print*, 'time to update convection bias file'
+        if (masterproc) write(iulog,*) "ncsec, next sec", ncsec,ConvStateSwap_Next_Sec 
+
+        fileexists=.FALSE.
       
-      INQUIRE(FILE=trim(ConvStateSwap_Path)//trim(ConvStateSwap_File), EXIST=fileexists)
+        ! check if file exists and if so, read in
+        ConvStateSwap_File=interpret_filename_spec(ConvStateSwap_File_Template      , &
+              yr_spec=ConvStateSwap_Next_Year , &
+              mon_spec=ConvStateSwap_Next_Month, &
+              day_spec=ConvStateSwap_Next_Day  , &
+              sec_spec=ConvStateSwap_Next_Sec    )
+        
+        INQUIRE(FILE=trim(ConvStateSwap_Path)//trim(ConvStateSwap_File), EXIST=fileexists)
+        
+        if (.not. fileexists) print*, 'file missing', trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+
+        if (fileexists) then
+          if(masterproc) then
+            write(iulog,*) 'ConvStateSwap: Reading convective state file:',trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+          endif
+
+          call read_netcdf_conv_state_swap (trim(ConvStateSwap_Path)//trim(ConvStateSwap_File))
+
+        end if
+
+        ! increment time for next read
+        call timemgr_time_inc(YMD1,ConvStateSwap_Next_Sec,              &
+        YMD2,ConvStateSwap_Next_Sec,ConvStateSwap_Step,0,0)
+        ConvStateSwap_Next_Year =(YMD2/10000)
+        YMD2            = YMD2-(ConvStateSwap_Next_Year*10000)
+        ConvStateSwap_Next_Month=(YMD2/100)
+        ConvStateSwap_Next_Day  = YMD2-(ConvStateSwap_Next_Month*100)
       
-      if (.not. fileexists) print*, 'file missing', trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
-
-      if (fileexists) then
-        if(masterproc) then
-          write(iulog,*) 'ConvStateSwap: Reading convective state file:',trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
-        endif
-
-        call read_netcdf_conv_state_swap (trim(ConvStateSwap_Path)//trim(ConvStateSwap_File))
-
-      end if
-
-      ! increment time for next read
-      call timemgr_time_inc(YMD1,ConvStateSwap_Next_Sec,              &
-      YMD2,ConvStateSwap_Next_Sec,ConvStateSwap_Step,0,0)
-      ConvStateSwap_Next_Year =(YMD2/10000)
-      YMD2            = YMD2-(ConvStateSwap_Next_Year*10000)
-      ConvStateSwap_Next_Month=(YMD2/100)
-      ConvStateSwap_Next_Day  = YMD2-(ConvStateSwap_Next_Month*100)
-    
-      do c = begchunk, endchunk
-        ncols = get_ncols_p(c)
-        do i = 1, ncols
-            do k=1,pver
-                state(c)%qconvforce(i,k)=(Qfield3d(i,k,c))/ConvStateSwap_tau
-                state(c)%uconvforce(i,k)=(Ufield3d(i,k,c))/ConvStateSwap_tau
-                state(c)%vconvforce(i,k)=(Vfield3d(i,k,c))/ConvStateSwap_tau
-                state(c)%sconvforce(i,k)=(Tfield3d(i,k,c))/ConvStateSwap_tau
-            end do
+        do c = begchunk, endchunk
+          ncols = get_ncols_p(c)
+          do i = 1, ncols
+              do k=1,pver
+                  state(c)%qconvforce(i,k) = (Qfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef
+                  state(c)%uconvforce(i,k) = (Ufield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef
+                  state(c)%vconvforce(i,k) = (Vfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef
+                  state(c)%sconvforce(i,k) = (Tfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef
+              end do
+          end do
         end do
-      end do
-    
-    endif ! Update Forcing
+      endif
 
-   end subroutine update_conv_state_swap_profile 
+    elseif(ConvStateSwap_use_forcing_opt.eq.1) then
+
+      if((Running_mean_Model).and.(Running_mean_ON)) then
+        
+        ! subtract state added from nudging
+        ! should be negative of whatever is being applied from nudging. conv_swap_in will add this as a positive tendency
+#if ( defined SPMD )
+        do c = begchunk, endchunk
+          call running_mean_timestep_tend(state(c),ptend(c))
+          ncols = get_ncols_p(c)
+
+          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef
+          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef
+          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef
+          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef
+
+          call physics_ptend_reset(ptend(c))
+        enddo
+#endif
+
+      else if((Force_Model).and.(Force_ON)) then
+        
+        ! subtract state added from corrector
+#if ( defined SPMD )
+        do c = begchunk, endchunk
+          call corrector_timestep_tend(state(c),ptend(c))
+          ncols = get_ncols_p(c)
+
+          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef
+          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef
+          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef
+          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef
+
+          call physics_ptend_reset(ptend(c))
+        enddo
+#endif
+
+      else
+        if(masterproc) then 
+          write(iulog,*) "WARNING: running mean and correction not applied, need different opt "
+        endif 
+      endif 
+
+    elseif(ConvStateSwap_use_forcing_opt.eq.2) then ! use file and tendency
+
+     ! determine whether time to update convection state file
+      call get_curr_date(Year,Month,Day,ncsec)
+      YMD=(Year*10000) + (Month*100) + Day
+      YMD1=(ConvStateSwap_Next_Year*10000) + (ConvStateSwap_Next_Month*100) + ConvStateSwap_Next_Day
+      call timemgr_time_ge(YMD1,ConvStateSwap_Next_Sec,            &
+                          YMD ,ncsec           ,Update_ConvState)
+
+      ! if time to read
+      if (Update_ConvState) then
+
+        if (masterproc) write(iulog,*) 'time to update convection bias file'
+        if (masterproc) write(iulog,*) "ncsec, next sec", ncsec,ConvStateSwap_Next_Sec 
+
+        fileexists=.FALSE.
+      
+        ! check if file exists and if so, read in
+        ConvStateSwap_File=interpret_filename_spec(ConvStateSwap_File_Template      , &
+              yr_spec=ConvStateSwap_Next_Year , &
+              mon_spec=ConvStateSwap_Next_Month, &
+              day_spec=ConvStateSwap_Next_Day  , &
+              sec_spec=ConvStateSwap_Next_Sec    )
+        
+        INQUIRE(FILE=trim(ConvStateSwap_Path)//trim(ConvStateSwap_File), EXIST=fileexists)
+        
+        if (.not. fileexists) print*, 'file missing', trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+
+        if (fileexists) then
+          if(masterproc) then
+            write(iulog,*) 'ConvStateSwap: Reading convective state file:',trim(ConvStateSwap_Path)//trim(ConvStateSwap_File)
+          endif
+
+          call read_netcdf_conv_state_swap (trim(ConvStateSwap_Path)//trim(ConvStateSwap_File))
+
+          if(masterproc) then 
+            write(iulog,*) "reading file, Qfield3d(i,k,c) ", Qfield3d(1,20,begchunk)
+          endif
+        end if
+
+        ! increment time for next read
+        call timemgr_time_inc(YMD1,ConvStateSwap_Next_Sec,              &
+        YMD2,ConvStateSwap_Next_Sec,ConvStateSwap_Step,0,0)
+        ConvStateSwap_Next_Year =(YMD2/10000)
+        YMD2            = YMD2-(ConvStateSwap_Next_Year*10000)
+        ConvStateSwap_Next_Month=(YMD2/100)
+        ConvStateSwap_Next_Day  = YMD2-(ConvStateSwap_Next_Month*100)
+      endif  ! update file 
+
+        if((Running_mean_Model).and.(Running_mean_ON)) then
+#if ( defined SPMD )        
+        do c = begchunk, endchunk
+          ncols = get_ncols_p(c)
+
+          do i = 1, ncols
+              do k=1,pver
+
+              state(c)%uconvforce(i,k) = (Ufield3d(i,k,c)-Running_nudge_U(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef
+              state(c)%vconvforce(i,k) = (Vfield3d(i,k,c)-Running_nudge_V(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef
+              state(c)%sconvforce(i,k) = (Tfield3d(i,k,c)-Running_nudge_T(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef
+              state(c)%qconvforce(i,k) = (Qfield3d(i,k,c)-Running_nudge_Q(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef
+
+              enddo
+          enddo
+        enddo
+#endif
+      else if((Force_Model).and.(Force_ON)) then
+
+        ! subtract state added from corrector
+        do c = begchunk, endchunk
+          call corrector_timestep_tend(state(c),ptend(c))
+
+          if(masterproc) then 
+            write(iulog,*) "in Force Model c",c
+            write(iulog,*) "Ufield3d(i,k,c) ",Ufield3d(1,20,c)
+            write(iulog,*) "ptend(c)%u(:ncols,:pver) ",ptend(c)%u(1,20)
+            write(iulog,*) "state(c)%uconvforce(:ncols,:pver) ",state(c)%uconvforce(1,20)
+          endif 
+          ncols = get_ncols_p(c)
+
+          state(c)%uconvforce(:ncols,:pver) = (Ufield3d(:ncols,:pver,c)-ptend(c)%u(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Ucoef
+          state(c)%vconvforce(:ncols,:pver) = (Vfield3d(:ncols,:pver,c)-ptend(c)%v(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Vcoef
+          state(c)%sconvforce(:ncols,:pver) = (Tfield3d(:ncols,:pver,c)-ptend(c)%s(:ncols,:pver)*21600._r8/cpair)/ConvStateSwap_tau*ConvStateSwap_Tcoef
+          state(c)%qconvforce(:ncols,:pver) = (Qfield3d(:ncols,:pver,c)-ptend(c)%q(:ncols,:pver,indw)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Qcoef
+
+          call physics_ptend_reset(ptend(c))
+        enddo
+
+      else
+        if(masterproc) then 
+          write(iulog,*) "WARNING: running mean not applied, need different opt "
+        endif 
+      endif  ! if running_mean (updates with climo)
+
+      
+    endif ! tend_opt    
+    endif ! After_Beg   
+  end subroutine update_conv_state_swap_profile
 
 
    subroutine conv_state_swap_in (ztodt, state,tend)
@@ -597,15 +816,16 @@ contains
                        
  !-----
 
+    zero = 0._r8
     istep=get_nstep()
  
-    if (masterproc) then
-    print*, "starting swap to convection state"
-    !print*, state%sconvforce(1,5)*cpair ! lower number is higher level
-    print*, state%s(1,5)
-    !print*, state%uconvforce(1,5)
-    !print*, state%u(1,5)
-    endif
+    ! if (masterproc) then
+    ! print*, "starting swap to convection state"
+    ! !print*, state%sconvforce(1,5)*cpair ! lower number is higher level
+    ! print*, state%s(1,5)
+    ! !print*, state%uconvforce(1,5)
+    ! !print*, state%u(1,5)
+    ! endif
     
 #if ( defined SPMD )
     call cnst_get_ind('Q',indw)
@@ -617,7 +837,7 @@ contains
     do i = 1, ncols
     do k=1,pver   
     
-        ptend%q(i,k,1) = ptend%q(i,k,1) + state%qconvforce(i,k) !/forcingtime
+        ptend%q(i,k,indw) = ptend%q(i,k,indw) + state%qconvforce(i,k) !/forcingtime
         ptend%u(i,k) = ptend%u(i,k) + state%uconvforce(i,k) !/forcingtime
         ptend%v(i,k) = ptend%v(i,k) + state%vconvforce(i,k) !/forcingtime
         ptend%s(i,k) = ptend%s(i,k) + state%sconvforce(i,k)*cpair !/forcingtime
@@ -629,13 +849,13 @@ contains
     call physics_update (state, ptend, ztodt, tend) ! this calls ptend deallocate
     call check_energy_chng(state, tend, "convstateswap", istep, ztodt, zero, zero, zero, zero)
 
-    if (masterproc) then
-      print*, "finished swap to convection state"
-      !print*, state%sconvforce(1,5)*cpair
-      print*, state%s(1,5)
-      !print*, state%uconvforce(1,5)
-      !print*, state%u(1,5)
-    endif
+    ! if (masterproc) then
+    !   print*, "finished swap to convection state"
+    !   !print*, state%sconvforce(1,5)*cpair
+    !   print*, state%s(1,5)
+    !   !print*, state%uconvforce(1,5)
+    !   !print*, state%u(1,5)
+    ! endif
 #endif
  
    end subroutine conv_state_swap_in
@@ -665,15 +885,16 @@ contains
                        
  !-----
 
+    zero = 0._r8
     istep=get_nstep()
  
-    if (masterproc) then
-    print*, "starting swap from convection state"
-    !print*, state%sconvforce(1,5)*cpair ! lower number is higher level
-    print*, state%s(1,5)
-    !print*, state%uconvforce(1,5)
-    !print*, state%u(1,5)
-    endif
+    ! if (masterproc) then
+    ! print*, "starting swap from convection state"
+    ! !print*, state%sconvforce(1,5)*cpair ! lower number is higher level
+    ! print*, state%s(1,5)
+    ! !print*, state%uconvforce(1,5)
+    ! !print*, state%u(1,5)
+    ! endif
     
 #if ( defined SPMD )
     call cnst_get_ind('Q',indw)
@@ -685,7 +906,7 @@ contains
     do i = 1, ncols
     do k=1,pver   
     
-        ptend%q(i,k,1) = ptend%q(i,k,1) - state%qconvforce(i,k) !/forcingtime
+        ptend%q(i,k,indw) = ptend%q(i,k,indw) - state%qconvforce(i,k) !/forcingtime
         ptend%u(i,k) = ptend%u(i,k) - state%uconvforce(i,k) !/forcingtime
         ptend%v(i,k) = ptend%v(i,k) - state%vconvforce(i,k) !/forcingtime
         ptend%s(i,k) = ptend%s(i,k) - state%sconvforce(i,k)*cpair !/forcingtime
@@ -698,13 +919,13 @@ contains
     call physics_update (state, ptend, ztodt, tend) ! this calls ptend deallocate
     call check_energy_chng(state, tend, "convstateswap", istep, ztodt, zero, zero, zero, zero)
 
-    if (masterproc) then
-      print*, "finished swap from convection state"
-      !print*, state%sconvforce(1,5)*cpair
-      print*, state%s(1,5)
-      !print*, state%uconvforce(1,5)
-      !print*, state%u(1,5)
-    endif
+    ! if (masterproc) then
+    !   print*, "finished swap from convection state"
+    !   !print*, state%sconvforce(1,5)*cpair
+    !   print*, state%s(1,5)
+    !   !print*, state%uconvforce(1,5)
+    !   !print*, state%u(1,5)
+    ! endif
 #endif
     
    end subroutine conv_state_swap_out

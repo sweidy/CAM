@@ -217,6 +217,7 @@ module running_mean
   public:: running_mean_timestep_init
   public:: running_mean_timestep_tend
   public:: running_mean_write_climo_fv
+  public:: Running_nudge_U,Running_nudge_V,Running_nudge_T,Running_nudge_Q
   private:: running_mean_read_climo_fv
   private::running_mean_update_model_fv
   private::running_mean_write_model_fv
