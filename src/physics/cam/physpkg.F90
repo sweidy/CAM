@@ -2406,6 +2406,13 @@ contains
 
    endif
 
+   ! swap state after convection scheme
+   if (nstep > 1) then 
+   if (ConvStateSwap_Model) then
+      call conv_state_swap_out(ztodt, state,tend)
+   endif 
+   endif
+
 
     !===================================================
     ! Moist physical parameteriztions complete:
@@ -2431,6 +2438,14 @@ contains
     !===================================================
     ! Radiation computations
     !===================================================
+
+   ! swap state before radiation scheme
+    if (nstep > 1) then 
+    if (ConvStateSwap_Model) then
+      call conv_state_swap_in(ztodt, state,tend)
+    endif
+    endif
+
     call t_startf('radiation')
 
 
@@ -2446,7 +2461,7 @@ contains
 
     call t_stopf('radiation')
 
-   ! swap state after convection scheme
+   ! swap state after radiation scheme
    if (nstep > 1) then 
    if (ConvStateSwap_Model) then
 
