@@ -56,6 +56,27 @@ module conv_state_swap
   real(r8)         :: ConvStateSwap_Vcoef
   real(r8)         :: ConvStateSwap_Qcoef
   real(r8)         :: ConvStateSwap_Tcoef
+  integer          :: ConvStateSwap_prof
+  real(r8)         :: ConvStateSwap_Hwin_lat0
+  real(r8)         :: ConvStateSwap_Hwin_latWidth
+  real(r8)         :: ConvStateSwap_Hwin_latDelta
+  real(r8)         :: ConvStateSwap_Hwin_lon0
+  real(r8)         :: ConvStateSwap_Hwin_lonWidth
+  real(r8)         :: ConvStateSwap_Hwin_lonDelta
+  logical          :: ConvStateSwap_Hwin_Invert = .false.
+  real(r8)         :: ConvStateSwap_Hwin_lo
+  real(r8)         :: ConvStateSwap_Hwin_hi
+  real(r8)         :: ConvStateSwap_Vwin_Hindex
+  real(r8)         :: ConvStateSwap_Vwin_Hdelta
+  real(r8)         :: ConvStateSwap_Vwin_Lindex
+  real(r8)         :: ConvStateSwap_Vwin_Ldelta
+  logical          :: ConvStateSwap_Vwin_Invert =.false.
+  real(r8)         :: ConvStateSwap_Vwin_lo
+  real(r8)         :: ConvStateSwap_Vwin_hi
+  real(r8)         :: ConvStateSwap_Hwin_latWidthH
+  real(r8)         :: ConvStateSwap_Hwin_lonWidthH
+  real(r8)         :: ConvStateSwap_Hwin_max
+  real(r8)         :: ConvStateSwap_Hwin_min
   integer          :: ConvStateSwap_Beg_Year ,ConvStateSwap_Beg_Month
   integer          :: ConvStateSwap_Beg_Day  ,ConvStateSwap_Beg_Sec
 
@@ -70,6 +91,8 @@ module conv_state_swap
   real(r8),allocatable::Tfield3d (:,:,:) !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Qfield3d (:,:,:) !(pcols,pver,begchunk:endchunk)
 
+  real(r8),allocatable::W_prof (:,:,:) !(pcols,pver,begchunk:endchunk)
+
 contains
   !================================================================
   subroutine conv_state_swap_readnl(nlfile)
@@ -80,6 +103,7 @@ contains
    !===============================================================
    use namelist_utils,only:find_group_name
    use units         ,only:getunit,freeunit
+   use ppgrid        ,only: pver
    !
    ! Arguments
    !-------------
@@ -93,7 +117,15 @@ contains
                          ConvStateSwap_File_Template, ConvStateSwap_tau,                       &
                          ConvStateSwap_Step,ConvStateSwap_use_forcing_opt,                     &
                          ConvStateSwap_Ucoef, ConvStateSwap_Vcoef, ConvStateSwap_Qcoef,        &
-                         ConvStateSwap_Tcoef, ConvStateSwap_Beg_Year, ConvStateSwap_Beg_Month, &
+                         ConvStateSwap_Tcoef, ConvStateSwap_prof,                              &
+                         ConvStateSwap_Hwin_lat0,ConvStateSwap_Hwin_lon0,                      &
+                         ConvStateSwap_Hwin_latWidth,ConvStateSwap_Hwin_lonWidth,              &
+                         ConvStateSwap_Hwin_latDelta,ConvStateSwap_Hwin_lonDelta,              &
+                         ConvStateSwap_Hwin_Invert,                                            &
+                         ConvStateSwap_Vwin_Lindex,ConvStateSwap_Vwin_Hindex,                  &
+                         ConvStateSwap_Vwin_Ldelta,ConvStateSwap_Vwin_Hdelta,                  &
+                         ConvStateSwap_Vwin_Invert,                                            &
+                         ConvStateSwap_Beg_Year, ConvStateSwap_Beg_Month,                      &
                          ConvStateSwap_Beg_Day
 
    ! Set Default Namelist values
@@ -108,6 +140,23 @@ contains
    ConvStateSwap_Vcoef         = 1._r8
    ConvStateSwap_Qcoef         = 1._r8
    ConvStateSwap_Tcoef         = 1._r8
+   ConvStateSwap_prof          = 1
+   ConvStateSwap_Hwin_lat0     = 0._r8
+   ConvStateSwap_Hwin_latWidth = 9999._r8
+   ConvStateSwap_Hwin_latDelta = 1.0_r8
+   ConvStateSwap_Hwin_lon0     = 180._r8
+   ConvStateSwap_Hwin_lonWidth = 9999._r8
+   ConvStateSwap_Hwin_lonDelta = 1.0_r8
+   ConvStateSwap_Hwin_Invert   = .false.
+   ConvStateSwap_Hwin_lo       = 0.0_r8
+   ConvStateSwap_Hwin_hi       = 1.0_r8
+   ConvStateSwap_Vwin_Hindex   = float(pver+1)
+   ConvStateSwap_Vwin_Hdelta   = 0.001_r8
+   ConvStateSwap_Vwin_Lindex   = 0.0_r8
+   ConvStateSwap_Vwin_Ldelta   = 0.001_r8
+   ConvStateSwap_Vwin_Invert   = .false.
+   ConvStateSwap_Vwin_lo       = 0.0_r8
+   ConvStateSwap_Vwin_hi       = 1.0_r8
    ConvStateSwap_Beg_Year      = 1980
    ConvStateSwap_Beg_Month     = 1
    ConvStateSwap_Beg_Day       = 1
@@ -129,6 +178,66 @@ contains
      call freeunit(unitn)
    endif
 
+   ! Set hi/lo values according to the given '_Invert' parameters
+   !--------------------------------------------------------------
+   if(ConvStateSwap_Hwin_Invert) then
+     ConvStateSwap_Hwin_lo = 1.0_r8
+     ConvStateSwap_Hwin_hi = 0.0_r8
+   else
+     ConvStateSwap_Hwin_lo = 0.0_r8
+     ConvStateSwap_Hwin_hi = 1.0_r8
+   endif
+
+   if(ConvStateSwap_Vwin_Invert) then
+     ConvStateSwap_Vwin_lo = 1.0_r8
+     ConvStateSwap_Vwin_hi = 0.0_r8
+   else
+     ConvStateSwap_Vwin_lo = 0.0_r8
+     ConvStateSwap_Vwin_hi = 1.0_r8
+   endif
+
+   ! Check for valid namelist values
+   !----------------------------------
+   if((ConvStateSwap_Hwin_lat0.lt.-90._r8).or.(ConvStateSwap_Hwin_lat0.gt.+90._r8)) then
+     write(iulog,*) 'ConvStateSwap: Window lat0 must be in [-90,+90]'
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_lat0=',ConvStateSwap_Hwin_lat0
+     call endrun('conv_state_swap_readnl:: ERROR in namelist')
+   endif
+
+   if((ConvStateSwap_Hwin_lon0.lt.0._r8).or.(ConvStateSwap_Hwin_lon0.ge.360._r8)) then
+     write(iulog,*) 'ConvStateSwap: Window lon0 must be in [0,+360)'
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_lon0=',ConvStateSwap_Hwin_lon0
+     call endrun('conv_state_swap_readnl:: ERROR in namelist')
+   endif
+
+   if((ConvStateSwap_Vwin_Lindex.gt.ConvStateSwap_Vwin_Hindex)                         .or. &
+      (ConvStateSwap_Vwin_Hindex.gt.float(pver+1)).or.(ConvStateSwap_Vwin_Hindex.lt.0._r8).or. &
+      (ConvStateSwap_Vwin_Lindex.gt.float(pver+1)).or.(ConvStateSwap_Vwin_Lindex.lt.0._r8)   ) then
+     write(iulog,*) 'ConvStateSwap: Window Lindex must be in [0,pver+1]'
+     write(iulog,*) 'ConvStateSwap: Window Hindex must be in [0,pver+1]'
+     write(iulog,*) 'ConvStateSwap: Lindex must be LE than Hindex'
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Vwin_Lindex=',ConvStateSwap_Vwin_Lindex
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Vwin_Hindex=',ConvStateSwap_Vwin_Hindex
+     call endrun('conv_state_swap_readnl:: ERROR in namelist')
+   endif
+
+   if((ConvStateSwap_Hwin_latDelta.le.0._r8).or.(ConvStateSwap_Hwin_lonDelta.le.0._r8).or. &
+      (ConvStateSwap_Vwin_Hdelta  .le.0._r8).or.(ConvStateSwap_Vwin_Ldelta  .le.0._r8)    ) then
+     write(iulog,*) 'ConvStateSwap: Window Deltas must be positive'
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_latDelta=',ConvStateSwap_Hwin_latDelta
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_lonDelta=',ConvStateSwap_Hwin_lonDelta
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Vwin_Hdelta=',ConvStateSwap_Vwin_Hdelta
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Vwin_Ldelta=',ConvStateSwap_Vwin_Ldelta
+     call endrun('conv_state_swap_readnl:: ERROR in namelist')
+   endif
+
+   if((ConvStateSwap_Hwin_latWidth.le.0._r8).or.(ConvStateSwap_Hwin_lonWidth.le.0._r8)) then
+     write(iulog,*) 'ConvStateSwap: Window widths must be positive'
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_latWidth=',ConvStateSwap_Hwin_latWidth
+     write(iulog,*) 'ConvStateSwap:  ConvStateSwap_Hwin_lonWidth=',ConvStateSwap_Hwin_lonWidth
+     call endrun('conv_state_swap_readnl:: ERROR in namelist')
+   endif
+
    ! Broadcast namelist variables
    !------------------------------
 #ifdef SPMD
@@ -142,6 +251,23 @@ contains
    call mpibcast(ConvStateSwap_Vcoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(ConvStateSwap_Tcoef        , 1, mpir8 , 0, mpicom)
    call mpibcast(ConvStateSwap_Qcoef        , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_prof         , 1, mpiint, 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_lo      , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_hi      , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_lat0    , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_latWidth, 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_latDelta, 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_lon0    , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_lonWidth, 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_lonDelta, 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Hwin_Invert,   1, mpilog, 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_lo      , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_hi      , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_Hindex  , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_Hdelta  , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_Lindex  , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_Ldelta  , 1, mpir8 , 0, mpicom)
+   call mpibcast(ConvStateSwap_Vwin_Invert,   1, mpilog, 0, mpicom)
    call mpibcast(ConvStateSwap_Beg_Year     , 1, mpiint, 0, mpicom)
    call mpibcast(ConvStateSwap_Beg_Month    , 1, mpiint, 0, mpicom)
    call mpibcast(ConvStateSwap_Beg_Day      , 1, mpiint, 0, mpicom)
@@ -178,6 +304,11 @@ contains
     integer  hdim1_d,hdim2_d
     integer  dtime
     real(r8) rlat,rlon
+    real(r8) Wprof(pver)
+    real(r8) lonp,lon0,lonn,latp,lat0,latn
+    real(r8) Val1_p,Val2_p,Val3_p,Val4_p
+    real(r8) Val1_0,Val2_0,Val3_0,Val4_0
+    real(r8) Val1_n,Val2_n,Val3_n,Val4_n
 
     ! Get the time step size
     !------------------------
@@ -194,6 +325,9 @@ contains
     call alloc_err(istat,'corrector_init','Tfield3d',pcols*pver*((endchunk-begchunk)+1))
     allocate(Qfield3d(pcols,pver,begchunk:endchunk),stat=istat)
     call alloc_err(istat,'corrector_init','Qfield3d',pcols*pver*((endchunk-begchunk)+1))
+
+    allocate(W_prof(pcols,pver,begchunk:endchunk),stat=istat)
+    call alloc_err(istat,'conv_state_swap_init','W_prof',pcols*pver*((endchunk-begchunk)+1))
 
 
     ! Values initialized only by masterproc
@@ -228,6 +362,38 @@ contains
         ConvStateSwap_Next_Sec  =ConvStateSwap_Beg_Sec
       endif
 
+      ! Initialize values for window function
+      !----------------------------------------
+      lonp= 180._r8
+      lon0=   0._r8
+      lonn=-180._r8
+      latp=  90._r8-ConvStateSwap_Hwin_lat0
+      lat0=   0._r8
+      latn= -90._r8-ConvStateSwap_Hwin_lat0
+
+      ConvStateSwap_Hwin_lonWidthH=ConvStateSwap_Hwin_lonWidth/2._r8
+      ConvStateSwap_Hwin_latWidthH=ConvStateSwap_Hwin_latWidth/2._r8
+
+      Val1_p=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH+lonp)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val2_p=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH-lonp)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val3_p=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH+latp)/ConvStateSwap_Hwin_latDelta))/2._r8
+      Val4_p=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH-latp)/ConvStateSwap_Hwin_latDelta))/2_r8
+      Val1_0=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH+lon0)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val2_0=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH-lon0)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val3_0=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH+lat0)/ConvStateSwap_Hwin_latDelta))/2._r8
+      Val4_0=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH-lat0)/ConvStateSwap_Hwin_latDelta))/2._r8
+
+      Val1_n=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH+lonn)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val2_n=(1._r8+tanh((ConvStateSwap_Hwin_lonWidthH-lonn)/ConvStateSwap_Hwin_lonDelta))/2._r8
+      Val3_n=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH+latn)/ConvStateSwap_Hwin_latDelta))/2._r8
+      Val4_n=(1._r8+tanh((ConvStateSwap_Hwin_latWidthH-latn)/ConvStateSwap_Hwin_latDelta))/2._r8
+
+      ConvStateSwap_Hwin_max=     Val1_0*Val2_0*Val3_0*Val4_0
+      ConvStateSwap_Hwin_min=min((Val1_p*Val2_p*Val3_n*Val4_n), &
+                         (Val1_p*Val2_p*Val3_p*Val4_p), &
+                         (Val1_n*Val2_n*Val3_n*Val4_n), &
+                         (Val1_n*Val2_n*Val3_p*Val4_p))
+
       ConvStateSwap_File_Present=.false.
 
       ! Initialization is done, 
@@ -256,6 +422,27 @@ contains
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vcoef  =',ConvStateSwap_Vcoef
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Qcoef  =',ConvStateSwap_Qcoef
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Tcoef  =',ConvStateSwap_Tcoef
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_prof  =',ConvStateSwap_prof
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lat0     =',ConvStateSwap_Hwin_lat0
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_latWidth =',ConvStateSwap_Hwin_latWidth
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_latDelta =',ConvStateSwap_Hwin_latDelta
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lon0     =',ConvStateSwap_Hwin_lon0
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lonWidth =',ConvStateSwap_Hwin_lonWidth
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lonDelta =',ConvStateSwap_Hwin_lonDelta
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_Invert   =',ConvStateSwap_Hwin_Invert
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lo       =',ConvStateSwap_Hwin_lo
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_hi       =',ConvStateSwap_Hwin_hi
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_Hindex   =',ConvStateSwap_Vwin_Hindex
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_Hdelta   =',ConvStateSwap_Vwin_Hdelta
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_Lindex   =',ConvStateSwap_Vwin_Lindex
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_Ldelta   =',ConvStateSwap_Vwin_Ldelta
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_Invert   =',ConvStateSwap_Vwin_Invert
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_lo       =',ConvStateSwap_Vwin_lo
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Vwin_hi       =',ConvStateSwap_Vwin_hi
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_latWidthH=',ConvStateSwap_Hwin_latWidthH
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_lonWidthH=',ConvStateSwap_Hwin_lonWidthH
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_max      =',ConvStateSwap_Hwin_max
+      write(iulog,*) 'ConvStateSwap: ConvStateSwap_Hwin_min      =',ConvStateSwap_Hwin_min
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Year  =',ConvStateSwap_Beg_Year
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Month  =',ConvStateSwap_Beg_Month
       write(iulog,*) 'ConvStateSwap: ConvStateSwap_Beg_Day  =',ConvStateSwap_Beg_Day
@@ -274,6 +461,10 @@ end if ! masterproc
     call mpibcast(ConvStateSwap_nlev          ,            1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_nlon          ,            1, mpiint, 0, mpicom)
     call mpibcast(ConvStateSwap_nlat          ,            1, mpiint, 0, mpicom)
+    call mpibcast(ConvStateSwap_Hwin_max      ,            1, mpir8 , 0, mpicom)
+    call mpibcast(ConvStateSwap_Hwin_min      ,            1, mpir8 , 0, mpicom)
+    call mpibcast(ConvStateSwap_Hwin_lonWidthH,            1, mpir8 , 0, mpicom)
+    call mpibcast(ConvStateSwap_Hwin_latWidthH,            1, mpir8 , 0, mpicom)
 #endif
 
     ! Initialize the analysis filename at the NEXT time for startup.
@@ -296,6 +487,15 @@ end if ! masterproc
     ! Load zeros into arrays
     !------------------------------------------------------
     do lchnk=begchunk,endchunk
+      ncol=get_ncols_p(lchnk)
+      do icol=1,ncol
+        rlat=get_rlat_p(lchnk,icol)*180._r8/SHR_CONST_PI
+        rlon=get_rlon_p(lchnk,icol)*180._r8/SHR_CONST_PI
+
+        call conv_state_swap_set_profile(rlat,rlon,ConvStateSwap_prof,Wprof,pver)
+        W_prof(icol,:,lchnk)=Wprof(:)
+      end do
+
       Ufield3d(:pcols,:pver,lchnk)=0._r8
       Vfield3d(:pcols,:pver,lchnk)=0._r8
       Qfield3d(:pcols,:pver,lchnk)=0._r8
@@ -640,10 +840,10 @@ end if ! masterproc
           ncols = get_ncols_p(c)
           do i = 1, ncols
               do k=1,pver
-                  state(c)%qconvforce(i,k) = (Qfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef
-                  state(c)%uconvforce(i,k) = (Ufield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef
-                  state(c)%vconvforce(i,k) = (Vfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef
-                  state(c)%sconvforce(i,k) = (Tfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef
+                  state(c)%qconvforce(i,k) = (Qfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(i,k,c)
+                  state(c)%uconvforce(i,k) = (Ufield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(i,k,c)
+                  state(c)%vconvforce(i,k) = (Vfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(i,k,c)
+                  state(c)%sconvforce(i,k) = (Tfield3d(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef*W_prof(i,k,c)
               end do
           end do
         end do
@@ -660,10 +860,10 @@ end if ! masterproc
           call running_mean_timestep_tend(state(c),ptend(c))
           ncols = get_ncols_p(c)
 
-          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef
-          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef
-          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef
-          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef
+          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(:ncols,:pver,c)
+          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(:ncols,:pver,c)
+          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef*W_prof(:ncols,:pver,c)
+          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(:ncols,:pver,c)
 
           call physics_ptend_reset(ptend(c))
         enddo
@@ -677,10 +877,10 @@ end if ! masterproc
           call corrector_timestep_tend(state(c),ptend(c))
           ncols = get_ncols_p(c)
 
-          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef
-          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef
-          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef
-          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef
+          state(c)%uconvforce(:ncols,:pver) = -ptend(c)%u(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(:ncols,:pver,c)
+          state(c)%vconvforce(:ncols,:pver) = -ptend(c)%v(:ncols,:pver)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(:ncols,:pver,c)
+          state(c)%sconvforce(:ncols,:pver) = -ptend(c)%s(:ncols,:pver)*21600._r8/ConvStateSwap_tau/cpair*ConvStateSwap_Tcoef*W_prof(:ncols,:pver,c)
+          state(c)%qconvforce(:ncols,:pver) = -ptend(c)%q(:ncols,:pver,indw)*21600._r8/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(:ncols,:pver,c)
 
           call physics_ptend_reset(ptend(c))
         enddo
@@ -749,10 +949,10 @@ end if ! masterproc
           do i = 1, ncols
               do k=1,pver
 
-              state(c)%uconvforce(i,k) = (Ufield3d(i,k,c)-Running_nudge_U(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef
-              state(c)%vconvforce(i,k) = (Vfield3d(i,k,c)-Running_nudge_V(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef
-              state(c)%sconvforce(i,k) = (Tfield3d(i,k,c)-Running_nudge_T(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef
-              state(c)%qconvforce(i,k) = (Qfield3d(i,k,c)-Running_nudge_Q(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef
+              state(c)%uconvforce(i,k) = (Ufield3d(i,k,c)-Running_nudge_U(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(i,k,c)
+              state(c)%vconvforce(i,k) = (Vfield3d(i,k,c)-Running_nudge_V(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(i,k,c)
+              state(c)%sconvforce(i,k) = (Tfield3d(i,k,c)-Running_nudge_T(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Tcoef*W_prof(i,k,c)
+              state(c)%qconvforce(i,k) = (Qfield3d(i,k,c)-Running_nudge_Q(i,k,c))/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(i,k,c)
 
               enddo
           enddo
@@ -772,10 +972,10 @@ end if ! masterproc
           endif 
           ncols = get_ncols_p(c)
 
-          state(c)%uconvforce(:ncols,:pver) = (Ufield3d(:ncols,:pver,c)-ptend(c)%u(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Ucoef
-          state(c)%vconvforce(:ncols,:pver) = (Vfield3d(:ncols,:pver,c)-ptend(c)%v(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Vcoef
-          state(c)%sconvforce(:ncols,:pver) = (Tfield3d(:ncols,:pver,c)-ptend(c)%s(:ncols,:pver)*21600._r8/cpair)/ConvStateSwap_tau*ConvStateSwap_Tcoef
-          state(c)%qconvforce(:ncols,:pver) = (Qfield3d(:ncols,:pver,c)-ptend(c)%q(:ncols,:pver,indw)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Qcoef
+          state(c)%uconvforce(:ncols,:pver) = (Ufield3d(:ncols,:pver,c)-ptend(c)%u(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(:ncols,:pver,c)
+          state(c)%vconvforce(:ncols,:pver) = (Vfield3d(:ncols,:pver,c)-ptend(c)%v(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(:ncols,:pver,c)
+          state(c)%sconvforce(:ncols,:pver) = (Tfield3d(:ncols,:pver,c)-ptend(c)%s(:ncols,:pver)*21600._r8/cpair)/ConvStateSwap_tau*ConvStateSwap_Tcoef*W_prof(:ncols,:pver,c)
+          state(c)%qconvforce(:ncols,:pver) = (Qfield3d(:ncols,:pver,c)-ptend(c)%q(:ncols,:pver,indw)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(:ncols,:pver,c)
 
           call physics_ptend_reset(ptend(c))
         enddo
@@ -929,5 +1129,108 @@ end if ! masterproc
 #endif
     
    end subroutine conv_state_swap_out
+
+     !================================================================
+  subroutine conv_state_swap_set_profile(rlat,rlon,ConvStateSwap_prof,Wprof,nlev)
+   !
+   ! conv_state_swap_SET_PROFILE: for the given lat,lon, and ConvStateSwap_prof, set
+   !                      the verical profile of window coeffcients.
+   !                      Values range from 0. to 1. to affect spatial
+   !                      variations on ConvStateSwap strength.
+   !===============================================================
+
+   ! Arguments
+   !--------------
+   integer  nlev,ConvStateSwap_prof
+   real(r8) rlat,rlon
+   real(r8) Wprof(nlev)
+
+   ! Local values
+   !----------------
+   integer  ilev
+   real(r8) Hcoef,latx,lonx,Vmax,Vmin
+   real(r8) lon_lo,lon_hi,lat_lo,lat_hi,lev_lo,lev_hi
+
+   !---------------
+   ! set coeffcient
+   !---------------
+   if(ConvStateSwap_prof.eq.0) then
+     ! No ConvStateSwap
+     !-------------
+     Wprof(:)=0.0_r8
+   elseif(ConvStateSwap_prof.eq.1) then
+     ! Uniform ConvStateSwap
+     !-----------------
+     Wprof(:)=1.0_r8
+   elseif(ConvStateSwap_prof.eq.2) then
+     ! Localized ConvStateSwap with specified Heaviside window function
+     !------------------------------------------------------------
+     if(ConvStateSwap_Hwin_max.le.ConvStateSwap_Hwin_min) then
+       ! For a constant Horizontal window function,
+       ! just set Hcoef to the maximum of Hlo/Hhi.
+       !--------------------------------------------
+       Hcoef=max(ConvStateSwap_Hwin_lo,ConvStateSwap_Hwin_hi)
+     else
+       ! get lat/lon relative to window center
+       !------------------------------------------
+       latx=rlat-ConvStateSwap_Hwin_lat0
+       lonx=rlon-ConvStateSwap_Hwin_lon0
+       if(lonx.gt. 180._r8) lonx=lonx-360._r8
+       if(lonx.le.-180._r8) lonx=lonx+360._r8
+
+       ! Calcualte RAW window value
+       !-------------------------------
+       lon_lo=(ConvStateSwap_Hwin_lonWidthH+lonx)/ConvStateSwap_Hwin_lonDelta
+       lon_hi=(ConvStateSwap_Hwin_lonWidthH-lonx)/ConvStateSwap_Hwin_lonDelta
+       lat_lo=(ConvStateSwap_Hwin_latWidthH+latx)/ConvStateSwap_Hwin_latDelta
+       lat_hi=(ConvStateSwap_Hwin_latWidthH-latx)/ConvStateSwap_Hwin_latDelta
+       Hcoef=((1._r8+tanh(lon_lo))/2._r8)*((1._r8+tanh(lon_hi))/2._r8) &
+            *((1._r8+tanh(lat_lo))/2._r8)*((1._r8+tanh(lat_hi))/2._r8)
+
+       ! Scale the horizontal window coef for specfied range of values.
+       !--------------------------------------------------------
+       Hcoef=(Hcoef-ConvStateSwap_Hwin_min)/(ConvStateSwap_Hwin_max-ConvStateSwap_Hwin_min)
+       Hcoef=(1._r8-Hcoef)*ConvStateSwap_Hwin_lo + Hcoef*ConvStateSwap_Hwin_hi
+     endif
+
+     ! Load the RAW vertical window
+     !------------------------------
+     do ilev=1,nlev
+       lev_lo=(float(ilev)-ConvStateSwap_Vwin_Lindex)/ConvStateSwap_Vwin_Ldelta
+       lev_hi=(ConvStateSwap_Vwin_Hindex-float(ilev))/ConvStateSwap_Vwin_Hdelta
+       Wprof(ilev)=((1._r8+tanh(lev_lo))/2._r8)*((1._r8+tanh(lev_hi))/2._r8)
+     end do
+
+     ! Scale the Window function to span the values between Vlo and Vhi:
+     !-----------------------------------------------------------------
+     Vmax=maxval(Wprof)
+     Vmin=minval(Wprof)
+     if((Vmax.le.Vmin).or.((ConvStateSwap_Vwin_Hindex.ge.(nlev+1)).and. &
+                           (ConvStateSwap_Vwin_Lindex.le. 0      )     )) then
+       ! For a constant Vertical window function,
+       ! load maximum of Vlo/Vhi into Wprof()
+       !--------------------------------------------
+       Vmax=max(ConvStateSwap_Vwin_lo,ConvStateSwap_Vwin_hi)
+       Wprof(:)=Vmax
+     else
+       ! Scale the RAW vertical window for specfied range of values.
+       !--------------------------------------------------------
+       Wprof(:)=(Wprof(:)-Vmin)/(Vmax-Vmin)
+       Wprof(:)=ConvStateSwap_Vwin_lo + Wprof(:)*(ConvStateSwap_Vwin_hi-ConvStateSwap_Vwin_lo)
+     endif
+
+     ! The desired result is the product of the vertical profile
+     ! and the horizontal window coeffcient.
+     !----------------------------------------------------
+     Wprof(:)=Hcoef*Wprof(:)
+   else
+     call endrun('conv_state_swap_set_profile:: Unknown ConvStateSwap_prof value')
+   endif
+
+   ! End Routine
+   !------------
+   return
+  end subroutine ! conv_state_swap_set_profile
+  !================================================================
 
 end module conv_state_swap 
