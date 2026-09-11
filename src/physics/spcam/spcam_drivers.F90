@@ -316,6 +316,7 @@ subroutine tphysbc_spcam (ztodt, state,   &
     use sslt_rebin,      only: sslt_rebin_adv
     use qneg_module,     only: qneg3
     use conv_state_swap, only: ConvStateSwap_Model, conv_state_swap_in, conv_state_swap_out
+    use cam_logfile,     only: iulog
 
     implicit none
 
@@ -351,7 +352,7 @@ subroutine tphysbc_spcam (ztodt, state,   &
     integer ncol                               ! number of atmospheric columns
 
     integer  i                                 ! index
-    integer :: ixcldice, ixcldliq              ! constituent indices for cloud liquid and ice water.
+    integer :: ixcldice, ixcldliq, indw              ! constituent indices for cloud liquid and ice water.
 
     ! physics buffer fields to compute tendencies for stratiform package
     integer itim_old, ifld
@@ -453,6 +454,7 @@ subroutine tphysbc_spcam (ztodt, state,   &
 
     call cnst_get_ind('CLDLIQ', ixcldliq)
     call cnst_get_ind('CLDICE', ixcldice)
+    call cnst_get_ind('Q',indw)
     qini     (:ncol,:pver) = state%q(:ncol,:pver,       1)
     cldliqini(:ncol,:pver) = state%q(:ncol,:pver,ixcldliq)
     cldiceini(:ncol,:pver) = state%q(:ncol,:pver,ixcldice)
@@ -485,7 +487,22 @@ subroutine tphysbc_spcam (ztodt, state,   &
     call t_stopf('dry_adjustment')
 
     ! swap state before CRM
-    if (ConvStateSwap_Model) call conv_state_swap_in(ztodt, state,tend)
+    if (nstep > 1) then 
+    if (ConvStateSwap_Model) then
+
+      if(masterproc) then 
+         write(iulog,*) "before swap in: phys_state%q(lev20): ", state%q(1,20,indw)
+      endif
+
+      call conv_state_swap_in(ztodt, state,tend)
+
+      if(masterproc) then 
+         write(iulog,*) "after swap in: phys_state%q(lev20): ", state%q(1,20,indw)
+      endif
+    
+    endif 
+    endif
+   ! if (ConvStateSwap_Model) call conv_state_swap_in(ztodt, state,tend)
 
     ! -------------------------------------------------------------------------------
     ! Call cloud resolving model
@@ -493,9 +510,25 @@ subroutine tphysbc_spcam (ztodt, state,   &
 
     call crm_physics_tend(ztodt, state, tend, ptend, pbuf, cam_in)
     call physics_update(state, ptend, ztodt, tend)
+    ! U,V not updated by CRM 
 
     ! swap state after CRM
-    if (ConvStateSwap_Model) call conv_state_swap_out(ztodt, state,tend)
+    if (nstep > 1) then 
+    if (ConvStateSwap_Model) then
+
+      if(masterproc) then 
+         write(iulog,*) "before swap out: phys_state%q(lev20): ", state%q(1,20,indw)
+      endif
+
+      call conv_state_swap_out(ztodt, state,tend)
+
+      if(masterproc) then 
+         write(iulog,*) "after swap out: phys_state%q(lev20): ", state%q(1,20,indw)
+      endif
+    
+    endif 
+    endif
+    !if (ConvStateSwap_Model) call conv_state_swap_out(ztodt, state,tend)
 
     !===================================================
     ! Moist physical parameteriztions complete:

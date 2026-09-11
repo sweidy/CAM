@@ -496,6 +496,10 @@ end if ! masterproc
         W_prof(icol,:,lchnk)=Wprof(:)
       end do
 
+      ! if(masterproc) then
+      !   write(iulog,*) 'W_prof:',W_prof(ncol,:,lchnk)
+      ! endif
+
       Ufield3d(:pcols,:pver,lchnk)=0._r8
       Vfield3d(:pcols,:pver,lchnk)=0._r8
       Qfield3d(:pcols,:pver,lchnk)=0._r8
@@ -958,27 +962,30 @@ end if ! masterproc
           enddo
         enddo
 #endif
-      else if((Force_Model).and.(Force_ON)) then
+      ! else if((Force_Model).and.(Force_ON)) then
 
-        ! subtract state added from corrector
-        do c = begchunk, endchunk
-          call corrector_timestep_tend(state(c),ptend(c))
+      !   ! subtract state added from corrector
+      !   do c = begchunk, endchunk
+      !     call corrector_timestep_tend(state(c),ptend(c))
 
-          if(masterproc) then 
-            write(iulog,*) "in Force Model c",c
-            write(iulog,*) "Ufield3d(i,k,c) ",Ufield3d(1,20,c)
-            write(iulog,*) "ptend(c)%u(:ncols,:pver) ",ptend(c)%u(1,20)
-            write(iulog,*) "state(c)%uconvforce(:ncols,:pver) ",state(c)%uconvforce(1,20)
-          endif 
-          ncols = get_ncols_p(c)
+      !     if(masterproc) then 
+      !       write(iulog,*) "in Force Model c",c
+      !       write(iulog,*) "Ufield3d(i,k,c) ",Ufield3d(1,20,c)
+      !       write(iulog,*) "ptend(c)%u(:ncols,:pver) ",ptend(c)%u(1,20)
+      !       write(iulog,*) "state(c)%uconvforce(:ncols,:pver) ",state(c)%uconvforce(1,20)
+      !     endif 
+      !     ncols = get_ncols_p(c)
 
-          state(c)%uconvforce(:ncols,:pver) = (Ufield3d(:ncols,:pver,c)-ptend(c)%u(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(:ncols,:pver,c)
-          state(c)%vconvforce(:ncols,:pver) = (Vfield3d(:ncols,:pver,c)-ptend(c)%v(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(:ncols,:pver,c)
-          state(c)%sconvforce(:ncols,:pver) = (Tfield3d(:ncols,:pver,c)-ptend(c)%s(:ncols,:pver)*21600._r8/cpair)/ConvStateSwap_tau*ConvStateSwap_Tcoef*W_prof(:ncols,:pver,c)
-          state(c)%qconvforce(:ncols,:pver) = (Qfield3d(:ncols,:pver,c)-ptend(c)%q(:ncols,:pver,indw)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(:ncols,:pver,c)
+      !     ! TODO: this should be Ufield - (MERRA - ptend*tau)
+      !     ! either read in MERRA or read in MERRA - ptend from file --> then wouldn't need corrector_timestep_tend
+      !     ! for forced runs, should be using opt=0
+      !     state(c)%uconvforce(:ncols,:pver) = (Ufield3d(:ncols,:pver,c)-ptend(c)%u(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Ucoef*W_prof(:ncols,:pver,c)
+      !     state(c)%vconvforce(:ncols,:pver) = (Vfield3d(:ncols,:pver,c)-ptend(c)%v(:ncols,:pver)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Vcoef*W_prof(:ncols,:pver,c)
+      !     state(c)%sconvforce(:ncols,:pver) = (Tfield3d(:ncols,:pver,c)-ptend(c)%s(:ncols,:pver)*21600._r8/cpair)/ConvStateSwap_tau*ConvStateSwap_Tcoef*W_prof(:ncols,:pver,c)
+      !     state(c)%qconvforce(:ncols,:pver) = (Qfield3d(:ncols,:pver,c)-ptend(c)%q(:ncols,:pver,indw)*21600._r8)/ConvStateSwap_tau*ConvStateSwap_Qcoef*W_prof(:ncols,:pver,c)
 
-          call physics_ptend_reset(ptend(c))
-        enddo
+      !     call physics_ptend_reset(ptend(c))
+      !   enddo
 
       else
         if(masterproc) then 
